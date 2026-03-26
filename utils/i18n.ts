@@ -147,7 +147,6 @@ export interface Translations {
   playwrightGatewayDesc: string;
   playwrightGatewayBridgeHint: string;
   playwrightGatewayCommandLabel: string;
-  playwrightGatewayInstallBridge: string;
   playwrightGatewayCopyCommand: string;
   playwrightGatewayBackgroundLabel: string;
   playwrightGatewayStopLabel: string;
@@ -156,9 +155,6 @@ export interface Translations {
   playwrightGatewaySelect: string;
   playwrightGatewayAdded: string;
   playwrightGatewayExists: string;
-  playwrightGatewayTokenLabel: string;
-  playwrightGatewayTokenHint: string;
-  playwrightGatewayTargetTabHint: string;
   
   // Sidepanel
   newChat: string;
@@ -403,10 +399,9 @@ const en: Translations = {
   mcpAuthOAuth: 'OAuth 2.1',
   mcpOAuthHint: 'OAuth authentication will open a browser window for authorization when connecting. The token will be automatically managed.',
   playwrightGatewayTitle: 'Local Playwright Gateway',
-  playwrightGatewayDesc: 'Once the local Playwright MCP server is running on port 8931, Tactus will auto-detect it and use it for current-tab automation.',
-  playwrightGatewayBridgeHint: 'Install the Playwright MCP Bridge browser extension first, then run the local gateway command below.',
+  playwrightGatewayDesc: 'Start the local gateway, then return to Tactus and run Playwright tools on the current tab.',
+  playwrightGatewayBridgeHint: 'No second browser extension is required. Once the service is running, Tactus will bind the current tab automatically.',
   playwrightGatewayCommandLabel: 'Launch command',
-  playwrightGatewayInstallBridge: 'Install Bridge Extension',
   playwrightGatewayCopyCommand: 'Copy command',
   playwrightGatewayBackgroundLabel: 'Background start',
   playwrightGatewayStopLabel: 'How to stop',
@@ -415,9 +410,6 @@ const en: Translations = {
   playwrightGatewaySelect: 'Open Existing Gateway',
   playwrightGatewayAdded: 'Local Playwright Gateway has been added.',
   playwrightGatewayExists: 'Existing Playwright Gateway configuration opened.',
-  playwrightGatewayTokenLabel: 'Bridge token',
-  playwrightGatewayTokenHint: 'Paste the full PLAYWRIGHT_MCP_EXTENSION_TOKEN=... line from the Bridge page, or paste only the value.',
-  playwrightGatewayTargetTabHint: 'If you do not set the token, the Bridge will ask you to choose a page. Always select the real target tab, not "Playwright MCP extension".',
   
   // Sidepanel
   newChat: 'New Chat',
@@ -662,10 +654,9 @@ const zhCN: Translations = {
   mcpAuthOAuth: 'OAuth 2.1',
   mcpOAuthHint: 'OAuth 认证将在连接时打开浏览器窗口进行授权，Token 将自动管理。',
   playwrightGatewayTitle: '本地 Playwright Gateway',
-  playwrightGatewayDesc: '只要本地 Playwright MCP 服务运行在 8931 端口，Tactus 就会自动探测并接入，用于当前标签页自动化。',
-  playwrightGatewayBridgeHint: '请先安装 Playwright MCP Bridge 浏览器扩展，再运行下方本地 gateway 启动命令。',
+  playwrightGatewayDesc: '先启动本地 gateway，再回到 Tactus 在当前标签页上测试 Playwright 工具。',
+  playwrightGatewayBridgeHint: '这个模式不需要第二个浏览器扩展。服务启动后，Tactus 会自动绑定当前标签页。',
   playwrightGatewayCommandLabel: '启动命令',
-  playwrightGatewayInstallBridge: '安装 Bridge 扩展',
   playwrightGatewayCopyCommand: '复制命令',
   playwrightGatewayBackgroundLabel: '后台启动',
   playwrightGatewayStopLabel: '关闭方式',
@@ -674,9 +665,6 @@ const zhCN: Translations = {
   playwrightGatewaySelect: '定位已配置 Gateway',
   playwrightGatewayAdded: '已添加本地 Playwright Gateway 配置。',
   playwrightGatewayExists: '已定位现有的 Playwright Gateway 配置。',
-  playwrightGatewayTokenLabel: 'Bridge Token',
-  playwrightGatewayTokenHint: '把 Bridge 页面里整行 PLAYWRIGHT_MCP_EXTENSION_TOKEN=... 直接粘到这里，或者只粘贴等号右侧的值也可以。',
-  playwrightGatewayTargetTabHint: '如果不填写 token，Bridge 首次连接时会弹出选页确认。请务必选择真正要控制的网页，不要选“Playwright MCP extension”这一行。',
   
   // Sidepanel
   newChat: '新建对话',

@@ -1,17 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
   PLAYWRIGHT_GATEWAY_DEFAULT_NAME,
+  PLAYWRIGHT_GATEWAY_PACKAGE_NAME,
   PLAYWRIGHT_GATEWAY_DEFAULT_URL,
   PLAYWRIGHT_GATEWAY_FALLBACK_URLS,
-  PLAYWRIGHT_MCP_BRIDGE_EXTENSION_URL,
+  PLAYWRIGHT_GATEWAY_DEFAULT_RELAY_PORT,
   buildPlaywrightGatewayBackgroundCommand,
-  buildPlaywrightGatewayLaunchCommand,
   buildPlaywrightGatewayStopHint,
   buildPlaywrightGatewayCommand,
   createPlaywrightGatewayServerConfig,
   findPlaywrightGatewayServer,
   getPlaywrightGatewayRuntimeServer,
-  normalizePlaywrightExtensionToken,
   normalizePlaywrightGatewayServer,
 } from './playwrightGateway';
 
@@ -31,67 +30,31 @@ describe('createPlaywrightGatewayServerConfig', () => {
 
 describe('buildPlaywrightGatewayCommand', () => {
   it('生成默认启动命令', () => {
-    expect(buildPlaywrightGatewayCommand()).toBe('npx -y @playwright/mcp@latest --extension --host localhost --port 8931 --shared-browser-context');
+    expect(buildPlaywrightGatewayCommand()).toBe(`npx -y ${PLAYWRIGHT_GATEWAY_PACKAGE_NAME} --host localhost --port 8931 --relay-port 8932`);
   });
 
   it('在自定义端口时追加参数', () => {
-    expect(buildPlaywrightGatewayCommand(9011)).toBe('npx -y @playwright/mcp@latest --extension --host localhost --port 9011 --shared-browser-context');
+    expect(buildPlaywrightGatewayCommand(9011, 9012)).toBe(`npx -y ${PLAYWRIGHT_GATEWAY_PACKAGE_NAME} --host localhost --port 9011 --relay-port 9012`);
   });
 });
 
 describe('buildPlaywrightGatewayBackgroundCommand', () => {
   it('生成 macOS 后台启动命令', () => {
-    expect(buildPlaywrightGatewayBackgroundCommand('darwin')).toBe('nohup npx -y @playwright/mcp@latest --extension --host localhost --port 8931 --shared-browser-context > ~/playwright-mcp.log 2>&1 &');
+    expect(buildPlaywrightGatewayBackgroundCommand('darwin')).toBe(`nohup npx -y ${PLAYWRIGHT_GATEWAY_PACKAGE_NAME} --host localhost --port 8931 --relay-port 8932 > ~/playwright-mcp.log 2>&1 &`);
   });
 
   it('生成 Windows PowerShell 后台启动命令', () => {
-    expect(buildPlaywrightGatewayBackgroundCommand('win32')).toBe('Start-Process powershell -WindowStyle Hidden -ArgumentList \'-NoProfile\',\'-Command\',\'npx -y @playwright/mcp@latest --extension --host localhost --port 8931 --shared-browser-context\'');
-  });
-
-  it('在 macOS 后台命令中注入扩展 token', () => {
-    expect(buildPlaywrightGatewayBackgroundCommand('darwin', 8931, 'PLAYWRIGHT_MCP_EXTENSION_TOKEN=abc123')).toBe(
-      "PLAYWRIGHT_MCP_EXTENSION_TOKEN='abc123' nohup npx -y @playwright/mcp@latest --extension --host localhost --port 8931 --shared-browser-context > ~/playwright-mcp.log 2>&1 &",
-    );
-  });
-
-  it('在 Windows 后台命令中注入扩展 token', () => {
-    expect(buildPlaywrightGatewayBackgroundCommand('win32', 8931, 'abc123')).toBe(
-      "Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-Command','$env:PLAYWRIGHT_MCP_EXTENSION_TOKEN=''abc123''; npx -y @playwright/mcp@latest --extension --host localhost --port 8931 --shared-browser-context'",
-    );
-  });
-});
-
-describe('buildPlaywrightGatewayLaunchCommand', () => {
-  it('生成 macOS 前台启动命令并带上扩展 token', () => {
-    expect(buildPlaywrightGatewayLaunchCommand('darwin', 8931, 'PLAYWRIGHT_MCP_EXTENSION_TOKEN=abc123')).toBe(
-      "PLAYWRIGHT_MCP_EXTENSION_TOKEN='abc123' npx -y @playwright/mcp@latest --extension --host localhost --port 8931 --shared-browser-context",
-    );
-  });
-
-  it('生成 Windows 前台启动命令并带上扩展 token', () => {
-    expect(buildPlaywrightGatewayLaunchCommand('win32', 9011, 'abc123')).toBe(
-      "$env:PLAYWRIGHT_MCP_EXTENSION_TOKEN='abc123'; npx -y @playwright/mcp@latest --extension --host localhost --port 9011 --shared-browser-context",
-    );
-  });
-});
-
-describe('normalizePlaywrightExtensionToken', () => {
-  it('支持直接粘贴扩展给出的整行环境变量', () => {
-    expect(normalizePlaywrightExtensionToken('PLAYWRIGHT_MCP_EXTENSION_TOKEN=abc123')).toBe('abc123');
-  });
-
-  it('会去掉首尾空白和包裹引号', () => {
-    expect(normalizePlaywrightExtensionToken('  \"abc123\"  ')).toBe('abc123');
+    expect(buildPlaywrightGatewayBackgroundCommand('win32')).toBe(`Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-Command','npx -y ${PLAYWRIGHT_GATEWAY_PACKAGE_NAME} --host localhost --port 8931 --relay-port 8932'`);
   });
 });
 
 describe('buildPlaywrightGatewayStopHint', () => {
   it('生成 macOS 一键停止命令', () => {
-    expect(buildPlaywrightGatewayStopHint('darwin')).toBe('PID=$(lsof -ti :8931) && [ -n "$PID" ] && kill $PID');
+    expect(buildPlaywrightGatewayStopHint('darwin')).toBe('PID=$(lsof -ti :8931 -ti :8932 | sort -u) && [ -n "$PID" ] && kill $PID');
   });
 
   it('生成 Windows 一键停止命令', () => {
-    expect(buildPlaywrightGatewayStopHint('win32')).toBe("$pids = Get-NetTCPConnection -LocalPort 8931 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique; if ($pids) { $pids | ForEach-Object { Stop-Process -Id $_ } }");
+    expect(buildPlaywrightGatewayStopHint('win32')).toBe("$pids = @(Get-NetTCPConnection -LocalPort 8931,8932 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique); if ($pids) { $pids | ForEach-Object { Stop-Process -Id $_ } }");
   });
 });
 
@@ -132,9 +95,9 @@ describe('findPlaywrightGatewayServer', () => {
   });
 });
 
-describe('playwright bridge extension url', () => {
-  it('使用官方 Chrome Web Store 地址', () => {
-    expect(PLAYWRIGHT_MCP_BRIDGE_EXTENSION_URL).toBe('https://chromewebstore.google.com/detail/playwright-mcp-bridge/mmlmfjhmonkocbjadbfplnigmagldckm');
+describe('playwright relay defaults', () => {
+  it('使用固定 relay 端口', () => {
+    expect(PLAYWRIGHT_GATEWAY_DEFAULT_RELAY_PORT).toBe(8932);
   });
 });
 

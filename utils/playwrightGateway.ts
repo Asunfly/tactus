@@ -1,15 +1,16 @@
 import type { McpServerConfig } from './mcpStorage';
+import { INTERNAL_PLAYWRIGHT_RELAY_DEFAULT_PORT } from './internalPlaywrightBridge';
 
 export const PLAYWRIGHT_GATEWAY_DEFAULT_PORT = 8931;
+export const PLAYWRIGHT_GATEWAY_DEFAULT_RELAY_PORT = INTERNAL_PLAYWRIGHT_RELAY_DEFAULT_PORT;
 export const PLAYWRIGHT_GATEWAY_BUILTIN_ID = 'builtin-playwright-gateway';
 export const PLAYWRIGHT_GATEWAY_DEFAULT_NAME = 'Local Playwright Gateway';
 export const PLAYWRIGHT_GATEWAY_DEFAULT_URL = `http://localhost:${PLAYWRIGHT_GATEWAY_DEFAULT_PORT}/mcp`;
+export const PLAYWRIGHT_GATEWAY_PACKAGE_NAME = 'tactus-playwright-gateway';
 export const PLAYWRIGHT_GATEWAY_FALLBACK_URLS = [
   `http://127.0.0.1:${PLAYWRIGHT_GATEWAY_DEFAULT_PORT}/mcp`,
 ];
-export const PLAYWRIGHT_GATEWAY_DEFAULT_DESCRIPTION = 'Connects Tactus to the local Playwright MCP gateway bound to the current browser tab.';
-export const PLAYWRIGHT_MCP_BRIDGE_EXTENSION_URL = 'https://chromewebstore.google.com/detail/playwright-mcp-bridge/mmlmfjhmonkocbjadbfplnigmagldckm';
-export const PLAYWRIGHT_MCP_EXTENSION_TOKEN_ENV = 'PLAYWRIGHT_MCP_EXTENSION_TOKEN';
+export const PLAYWRIGHT_GATEWAY_DEFAULT_DESCRIPTION = 'Connects Tactus to the local Playwright MCP gateway using the built-in current-tab bridge.';
 
 export type PlaywrightGatewayPlatform = 'darwin' | 'win32' | 'linux';
 
@@ -24,79 +25,33 @@ export function createPlaywrightGatewayServerConfig(id: string): McpServerConfig
   };
 }
 
-export function buildPlaywrightGatewayCommand(port = PLAYWRIGHT_GATEWAY_DEFAULT_PORT): string {
-  return `npx -y @playwright/mcp@latest --extension --host localhost --port ${port} --shared-browser-context`;
-}
-
-function stripWrappedQuotes(value: string): string {
-  if (
-    (value.startsWith('"') && value.endsWith('"'))
-    || (value.startsWith("'") && value.endsWith("'"))
-  ) {
-    return value.slice(1, -1).trim();
-  }
-
-  return value;
-}
-
-export function normalizePlaywrightExtensionToken(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-
-  const tokenLine = trimmed.match(/(?:^|[\s;])(?:export\s+)?PLAYWRIGHT_MCP_EXTENSION_TOKEN\s*=\s*(.+)$/);
-  return stripWrappedQuotes((tokenLine?.[1] ?? trimmed).trim());
-}
-
-function quoteForPosixShell(value: string): string {
-  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
-}
-
-function quoteForPowerShell(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
-}
-
-function buildPlaywrightGatewayEnvPrefix(
-  platform: PlaywrightGatewayPlatform,
-  extensionToken?: string,
-): string {
-  const token = extensionToken ? normalizePlaywrightExtensionToken(extensionToken) : '';
-  if (!token) return '';
-
-  if (platform === 'win32') {
-    return `$env:${PLAYWRIGHT_MCP_EXTENSION_TOKEN_ENV}=${quoteForPowerShell(token)}; `;
-  }
-
-  return `${PLAYWRIGHT_MCP_EXTENSION_TOKEN_ENV}=${quoteForPosixShell(token)} `;
-}
-
-export function buildPlaywrightGatewayLaunchCommand(
-  platform: PlaywrightGatewayPlatform,
+export function buildPlaywrightGatewayCommand(
   port = PLAYWRIGHT_GATEWAY_DEFAULT_PORT,
-  extensionToken?: string,
+  relayPort = PLAYWRIGHT_GATEWAY_DEFAULT_RELAY_PORT,
 ): string {
-  return `${buildPlaywrightGatewayEnvPrefix(platform, extensionToken)}${buildPlaywrightGatewayCommand(port)}`;
+  return `npx -y ${PLAYWRIGHT_GATEWAY_PACKAGE_NAME} --host localhost --port ${port} --relay-port ${relayPort}`;
 }
 
 export function buildPlaywrightGatewayBackgroundCommand(
   platform: PlaywrightGatewayPlatform,
   port = PLAYWRIGHT_GATEWAY_DEFAULT_PORT,
-  extensionToken?: string,
+  relayPort = PLAYWRIGHT_GATEWAY_DEFAULT_RELAY_PORT,
 ): string {
-  const launchCommand = buildPlaywrightGatewayLaunchCommand(platform, port, extensionToken);
+  const launchCommand = buildPlaywrightGatewayCommand(port, relayPort);
 
   if (platform === 'win32') {
-    return `Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-Command','${launchCommand.replace(/'/g, "''")}'`;
+    return `Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-Command','${launchCommand}'`;
   }
 
-  return `${buildPlaywrightGatewayEnvPrefix(platform, extensionToken)}nohup ${buildPlaywrightGatewayCommand(port)} > ~/playwright-mcp.log 2>&1 &`;
+  return `nohup ${launchCommand} > ~/playwright-mcp.log 2>&1 &`;
 }
 
 export function buildPlaywrightGatewayStopHint(platform: PlaywrightGatewayPlatform): string {
   if (platform === 'win32') {
-    return "$pids = Get-NetTCPConnection -LocalPort 8931 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique; if ($pids) { $pids | ForEach-Object { Stop-Process -Id $_ } }";
+    return "$pids = @(Get-NetTCPConnection -LocalPort 8931,8932 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique); if ($pids) { $pids | ForEach-Object { Stop-Process -Id $_ } }";
   }
 
-  return 'PID=$(lsof -ti :8931) && [ -n "$PID" ] && kill $PID';
+  return 'PID=$(lsof -ti :8931 -ti :8932 | sort -u) && [ -n "$PID" ] && kill $PID';
 }
 
 export function normalizePlaywrightGatewayServer<

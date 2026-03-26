@@ -1,3 +1,11 @@
+import {
+  INTERNAL_PLAYWRIGHT_BRIDGE_BIND_MESSAGE_TYPE,
+} from '../utils/internalPlaywrightBridge';
+import {
+  InternalPlaywrightBridgeBackground,
+  type BridgeDebuggerApi,
+} from '../utils/internalPlaywrightBridgeBackground';
+
 async function openSidePanel(tabId?: number): Promise<void> {
   const sidePanelApi = (browser as any).sidePanel;
   if (sidePanelApi?.open && tabId) {
@@ -134,6 +142,59 @@ async function executeScriptInTab(tabId: number, code: string, args: Record<stri
   throw new Error('脚本执行超时');
 }
 
+function createChromeDebuggerApi(): BridgeDebuggerApi | null {
+  const chromeApi = (globalThis as any).chrome;
+  const chromeDebugger = chromeApi?.debugger;
+  if (!chromeDebugger) return null;
+
+  const withChromeCallback = <T>(register: (callback: (result?: T) => void) => void): Promise<T> => {
+    return new Promise((resolve, reject) => {
+      register((result?: T) => {
+        const runtimeError = chromeApi?.runtime?.lastError;
+        if (runtimeError) {
+          reject(new Error(runtimeError.message));
+          return;
+        }
+        resolve(result as T);
+      });
+    });
+  };
+
+  return {
+    attach(debuggee, version) {
+      return withChromeCallback<void>((callback) => {
+        chromeDebugger.attach(debuggee, version, callback);
+      });
+    },
+    sendCommand(debuggee, method, params) {
+      return withChromeCallback<any>((callback) => {
+        chromeDebugger.sendCommand(debuggee, method, params, callback);
+      });
+    },
+    detach(debuggee) {
+      return withChromeCallback<void>((callback) => {
+        chromeDebugger.detach(debuggee, callback);
+      });
+    },
+    onEvent: {
+      addListener(listener) {
+        chromeDebugger.onEvent.addListener(listener);
+      },
+      removeListener(listener) {
+        chromeDebugger.onEvent.removeListener(listener);
+      },
+    },
+    onDetach: {
+      addListener(listener) {
+        chromeDebugger.onDetach.addListener(listener);
+      },
+      removeListener(listener) {
+        chromeDebugger.onDetach.removeListener(listener);
+      },
+    },
+  };
+}
+
 export default defineBackground(() => {
   // 监听扩展安装事件
   browser.runtime.onInstalled.addListener(async ({ reason }) => {
@@ -146,6 +207,16 @@ export default defineBackground(() => {
 
   // 跟踪 sidepanel 连接状态
   let sidePanelPort: any = null;
+  const internalPlaywrightBridge = !import.meta.env.FIREFOX
+    ? (() => {
+        const debuggerApi = createChromeDebuggerApi();
+        if (!debuggerApi) return null;
+        return new InternalPlaywrightBridgeBackground({
+          createSocket: (url) => new WebSocket(url),
+          debuggerApi,
+        });
+      })()
+    : null;
 
   // 监听 sidepanel 连接
   browser.runtime.onConnect.addListener((port) => {
@@ -210,6 +281,21 @@ export default defineBackground(() => {
     if (message.type === 'SET_QUOTE') {
       // Store quote temporarily for sidepanel to pick up
       browser.storage.local.set({ pendingQuote: message.quote });
+    }
+
+    if (message.type === INTERNAL_PLAYWRIGHT_BRIDGE_BIND_MESSAGE_TYPE) {
+      if (!internalPlaywrightBridge) {
+        sendResponse({ success: false, error: '当前浏览器不支持内置 Playwright bridge。' });
+        return false;
+      }
+
+      internalPlaywrightBridge.ensureBinding(message)
+        .then(() => sendResponse({ success: true }))
+        .catch((error) => sendResponse({
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      return true;
     }
     
     // 处理脚本执行请求

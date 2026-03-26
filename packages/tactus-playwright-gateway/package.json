@@ -1,0 +1,15 @@
+{
+  "name": "tactus-playwright-gateway",
+  "version": "0.0.0-local",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "tactus-playwright-gateway": "./bin/cli.mjs"
+  },
+  "files": [
+    "bin"
+  ],
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}
