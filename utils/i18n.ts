@@ -143,6 +143,22 @@ export interface Translations {
   mcpAuthBearer: string;
   mcpAuthOAuth: string;
   mcpOAuthHint: string;
+  playwrightGatewayTitle: string;
+  playwrightGatewayDesc: string;
+  playwrightGatewayBridgeHint: string;
+  playwrightGatewayCommandLabel: string;
+  playwrightGatewayInstallBridge: string;
+  playwrightGatewayCopyCommand: string;
+  playwrightGatewayBackgroundLabel: string;
+  playwrightGatewayStopLabel: string;
+  playwrightGatewayCopyStop: string;
+  playwrightGatewayAdd: string;
+  playwrightGatewaySelect: string;
+  playwrightGatewayAdded: string;
+  playwrightGatewayExists: string;
+  playwrightGatewayTokenLabel: string;
+  playwrightGatewayTokenHint: string;
+  playwrightGatewayTargetTabHint: string;
   
   // Sidepanel
   newChat: string;
@@ -166,6 +182,21 @@ export interface Translations {
   currentModelNoVision: string;
   noModelConfig: string;
   notConfigured: string;
+  automationLogTitle: string;
+  automationNoLogs: string;
+  automationRiskLow: string;
+  automationRiskMedium: string;
+  automationRiskHigh: string;
+  automationStatusPendingConfirmation: string;
+  automationStatusRunning: string;
+  automationStatusSuccess: string;
+  automationStatusError: string;
+  automationStatusCancelled: string;
+  automationConfirmTitle: string;
+  automationConfirmDesc: string;
+  automationConfirmReasonLabel: string;
+  automationConfirmActionLabel: string;
+  automationContinue: string;
   
   // 确认对话框
   confirmDeleteProvider: string;
@@ -371,6 +402,22 @@ const en: Translations = {
   mcpAuthBearer: 'Bearer Token',
   mcpAuthOAuth: 'OAuth 2.1',
   mcpOAuthHint: 'OAuth authentication will open a browser window for authorization when connecting. The token will be automatically managed.',
+  playwrightGatewayTitle: 'Local Playwright Gateway',
+  playwrightGatewayDesc: 'Once the local Playwright MCP server is running on port 8931, Tactus will auto-detect it and use it for current-tab automation.',
+  playwrightGatewayBridgeHint: 'Install the Playwright MCP Bridge browser extension first, then run the local gateway command below.',
+  playwrightGatewayCommandLabel: 'Launch command',
+  playwrightGatewayInstallBridge: 'Install Bridge Extension',
+  playwrightGatewayCopyCommand: 'Copy command',
+  playwrightGatewayBackgroundLabel: 'Background start',
+  playwrightGatewayStopLabel: 'How to stop',
+  playwrightGatewayCopyStop: 'Copy stop steps',
+  playwrightGatewayAdd: 'Save As MCP Config',
+  playwrightGatewaySelect: 'Open Existing Gateway',
+  playwrightGatewayAdded: 'Local Playwright Gateway has been added.',
+  playwrightGatewayExists: 'Existing Playwright Gateway configuration opened.',
+  playwrightGatewayTokenLabel: 'Bridge token',
+  playwrightGatewayTokenHint: 'Paste the full PLAYWRIGHT_MCP_EXTENSION_TOKEN=... line from the Bridge page, or paste only the value.',
+  playwrightGatewayTargetTabHint: 'If you do not set the token, the Bridge will ask you to choose a page. Always select the real target tab, not "Playwright MCP extension".',
   
   // Sidepanel
   newChat: 'New Chat',
@@ -394,6 +441,21 @@ const en: Translations = {
   currentModelNoVision: 'The current model does not support vision. Please enable vision for this model in settings.',
   noModelConfig: 'Please configure an AI provider in settings first',
   notConfigured: 'Not configured',
+  automationLogTitle: 'Automation Activity',
+  automationNoLogs: 'No automation actions yet.',
+  automationRiskLow: 'Low risk',
+  automationRiskMedium: 'Medium risk',
+  automationRiskHigh: 'High risk',
+  automationStatusPendingConfirmation: 'Awaiting confirmation',
+  automationStatusRunning: 'Running',
+  automationStatusSuccess: 'Completed',
+  automationStatusError: 'Failed',
+  automationStatusCancelled: 'Cancelled',
+  automationConfirmTitle: 'Automation Confirmation',
+  automationConfirmDesc: 'This action may change the current page. Please confirm before Tactus continues.',
+  automationConfirmReasonLabel: 'Reason',
+  automationConfirmActionLabel: 'Action',
+  automationContinue: 'Continue',
   
   // 确认对话框
   confirmDeleteProvider: 'Are you sure you want to delete this provider?',
@@ -599,6 +661,22 @@ const zhCN: Translations = {
   mcpAuthBearer: 'Bearer Token',
   mcpAuthOAuth: 'OAuth 2.1',
   mcpOAuthHint: 'OAuth 认证将在连接时打开浏览器窗口进行授权，Token 将自动管理。',
+  playwrightGatewayTitle: '本地 Playwright Gateway',
+  playwrightGatewayDesc: '只要本地 Playwright MCP 服务运行在 8931 端口，Tactus 就会自动探测并接入，用于当前标签页自动化。',
+  playwrightGatewayBridgeHint: '请先安装 Playwright MCP Bridge 浏览器扩展，再运行下方本地 gateway 启动命令。',
+  playwrightGatewayCommandLabel: '启动命令',
+  playwrightGatewayInstallBridge: '安装 Bridge 扩展',
+  playwrightGatewayCopyCommand: '复制命令',
+  playwrightGatewayBackgroundLabel: '后台启动',
+  playwrightGatewayStopLabel: '关闭方式',
+  playwrightGatewayCopyStop: '复制关闭步骤',
+  playwrightGatewayAdd: '保存为 MCP 配置',
+  playwrightGatewaySelect: '定位已配置 Gateway',
+  playwrightGatewayAdded: '已添加本地 Playwright Gateway 配置。',
+  playwrightGatewayExists: '已定位现有的 Playwright Gateway 配置。',
+  playwrightGatewayTokenLabel: 'Bridge Token',
+  playwrightGatewayTokenHint: '把 Bridge 页面里整行 PLAYWRIGHT_MCP_EXTENSION_TOKEN=... 直接粘到这里，或者只粘贴等号右侧的值也可以。',
+  playwrightGatewayTargetTabHint: '如果不填写 token，Bridge 首次连接时会弹出选页确认。请务必选择真正要控制的网页，不要选“Playwright MCP extension”这一行。',
   
   // Sidepanel
   newChat: '新建对话',
@@ -622,6 +700,21 @@ const zhCN: Translations = {
   currentModelNoVision: '当前模型未开启视觉支持，请在设置中为该模型开启后再上传图片',
   noModelConfig: '请先在设置中配置 AI 服务商',
   notConfigured: '未配置',
+  automationLogTitle: '自动化执行记录',
+  automationNoLogs: '当前还没有自动化操作记录。',
+  automationRiskLow: '低风险',
+  automationRiskMedium: '中风险',
+  automationRiskHigh: '高风险',
+  automationStatusPendingConfirmation: '等待确认',
+  automationStatusRunning: '执行中',
+  automationStatusSuccess: '已完成',
+  automationStatusError: '执行失败',
+  automationStatusCancelled: '已取消',
+  automationConfirmTitle: '自动化操作确认',
+  automationConfirmDesc: '该操作可能改变当前页面状态，请确认后再继续执行。',
+  automationConfirmReasonLabel: '拦截原因',
+  automationConfirmActionLabel: '即将执行',
+  automationContinue: '继续执行',
   
   // 确认对话框
   confirmDeleteProvider: '确定删除这个服务商吗？',

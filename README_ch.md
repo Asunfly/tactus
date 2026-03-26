@@ -65,6 +65,7 @@ Tactus 是首个在浏览器扩展中实现 Agent Skills 规范的产品：
 
 - **MCP Server 连接** - 添加并管理多个 HTTP MCP Server
 - **动态工具发现** - 自动从 MCP Server 获取可用工具并集成到对话中
+- **本地 Playwright Gateway** - 可接入本地 `@playwright/mcp` HTTP 服务，通过 Playwright MCP Bridge 将自动化绑定到当前浏览器标签页
 - **多种认证方式**：
   - 无认证（公开服务）
   - Bearer Token 认证
@@ -174,6 +175,41 @@ npm run build:firefox
 2. 点击添加 MCP Server
 3. 填写 Server URL 并选择认证方式
 4. 连接成功后，MCP 提供的工具将自动集成到对话中
+
+### 配置本地 Playwright Gateway
+
+1. 安装官方 **Playwright MCP Bridge** 浏览器扩展，用来把 Playwright MCP 绑定到当前浏览器标签页
+2. 在电脑终端后台启动本地 gateway：
+
+   - macOS
+   ```bash
+   nohup npx -y @playwright/mcp@latest --extension --host localhost --port 8931 --shared-browser-context > ~/playwright-mcp.log 2>&1 &
+   ```
+   - Windows PowerShell
+   ```powershell
+   Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-Command','npx -y @playwright/mcp@latest --extension --host localhost --port 8931 --shared-browser-context'
+   ```
+
+   如果 Bridge 扩展弹出了连接确认页，并显示 `PLAYWRIGHT_MCP_EXTENSION_TOKEN=...`，建议把这一整行环境变量加到启动命令里再重启本地 gateway。这样可以跳过后续确认页，避免连接到一半断开。
+
+3. 打开 Tactus 设置页，在 `MCP 配置` 中查看开启说明
+4. Tactus 会自动探测 `http://localhost:8931/mcp`
+5. 如需保留为手动 MCP 配置，可点击 `保存为 MCP 配置`
+6. 在首次执行自动化时，如果仍然出现 Bridge 选页提示，请选择真正需要控制的网页标签页，不要选择 `Playwright MCP extension` 自己的 `connect.html` 页面
+
+### 关闭本地 Playwright Gateway
+
+- macOS
+```bash
+PID=$(lsof -ti :8931) && [ -n "$PID" ] && kill $PID
+```
+
+- Windows PowerShell
+```powershell
+$pids = Get-NetTCPConnection -LocalPort 8931 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique; if ($pids) { $pids | ForEach-Object { Stop-Process -Id $_ } }
+```
+
+这样就能保持“右侧 Tactus 输入，左侧当前浏览器页面执行”的交互方式，而不必再单独启动另一个自动化浏览器窗口。
 
 ### Skill 文件夹结构
 

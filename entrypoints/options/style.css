@@ -1465,6 +1465,129 @@ body {
 
 /* ========== MCP 配置样式 ========== */
 
+.playwright-gateway-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 1fr) auto;
+  gap: 20px;
+  align-items: stretch;
+  padding: 22px 24px;
+  margin-bottom: 20px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(184, 134, 11, 0.1), rgba(184, 134, 11, 0.02)),
+    var(--card);
+  box-shadow: var(--shadow-sm);
+}
+
+.playwright-gateway-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.playwright-gateway-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.playwright-gateway-copy h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--foreground);
+  line-height: 1.3;
+}
+
+.playwright-gateway-token-group {
+  margin-bottom: 0;
+}
+
+.playwright-gateway-token-group input {
+  font-family: var(--font-mono);
+}
+
+.playwright-gateway-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted-foreground);
+  line-height: 1.6;
+}
+
+.playwright-gateway-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.playwright-gateway-command-card,
+.playwright-gateway-endpoint {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+[data-theme="dark"] .playwright-gateway-command-card,
+[data-theme="dark"] .playwright-gateway-endpoint {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.playwright-gateway-command-label,
+.playwright-gateway-endpoint span {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.playwright-gateway-command-card code,
+.playwright-gateway-endpoint code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--foreground);
+  word-break: break-all;
+}
+
+.playwright-gateway-command-card pre {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--foreground);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.playwright-gateway-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 1080px) {
+  .playwright-gateway-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .playwright-gateway-actions {
+    justify-content: flex-start;
+  }
+}
+
 .mcp-url {
   max-width: 180px;
   overflow: hidden;

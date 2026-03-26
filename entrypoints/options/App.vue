@@ -55,6 +55,17 @@ import {
 } from '../../utils/mcpStorage';
 import { mcpManager } from '../../utils/mcp';
 import {
+  PLAYWRIGHT_GATEWAY_DEFAULT_URL,
+  PLAYWRIGHT_MCP_BRIDGE_EXTENSION_URL,
+  buildPlaywrightGatewayBackgroundCommand,
+  buildPlaywrightGatewayStopHint,
+  createPlaywrightGatewayServerConfig,
+  findPlaywrightGatewayServer,
+  normalizePlaywrightExtensionToken,
+  normalizePlaywrightGatewayServer,
+  type PlaywrightGatewayPlatform,
+} from '../../utils/playwrightGateway';
+import {
   exportAllData,
   downloadExportData,
   readImportFile,
@@ -206,11 +217,50 @@ const isMcpSaving = ref(false);
 const isMcpTesting = ref(false);
 const mcpTestResult = ref<{ success: boolean; message: string; toolCount?: number } | null>(null);
 const unwatchMcpServers = ref<(() => void) | null>(null);
+const playwrightGatewayTokenInput = ref('');
 let mcpAutoSaveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let skipMcpAutoSave = false;
 
 const isNewMcpServer = computed(() => selectedMcpServerId.value === 'new');
 const selectedMcpServer = computed(() => mcpServers.value.find(s => s.id === selectedMcpServerId.value) || null);
+const existingPlaywrightGateway = computed(() => findPlaywrightGatewayServer(mcpServers.value));
+const normalizedPlaywrightGatewayToken = computed(() =>
+  normalizePlaywrightExtensionToken(playwrightGatewayTokenInput.value),
+);
+const currentPlaywrightPlatform = computed<PlaywrightGatewayPlatform>(() => {
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes('windows')) return 'win32';
+  if (ua.includes('mac os') || ua.includes('macintosh')) return 'darwin';
+  return 'linux';
+});
+const playwrightGatewayBackgroundCommand = computed(() =>
+  buildPlaywrightGatewayBackgroundCommand(
+    currentPlaywrightPlatform.value,
+    undefined,
+    normalizedPlaywrightGatewayToken.value,
+  ),
+);
+const playwrightGatewayStopHint = computed(() =>
+  buildPlaywrightGatewayStopHint(currentPlaywrightPlatform.value),
+);
+
+async function copyPlaywrightGatewayCommand() {
+  try {
+    await navigator.clipboard.writeText(playwrightGatewayBackgroundCommand.value);
+    showToast(i18n('copied'));
+  } catch {
+    showToast(currentLanguage.value === 'zh-CN' ? '复制失败，请手动复制命令。' : 'Copy failed, please copy the command manually.');
+  }
+}
+
+async function copyPlaywrightGatewayStopHint() {
+  try {
+    await navigator.clipboard.writeText(playwrightGatewayStopHint.value);
+    showToast(i18n('copied'));
+  } catch {
+    showToast(currentLanguage.value === 'zh-CN' ? '复制失败，请手动复制命令。' : 'Copy failed, please copy the command manually.');
+  }
+}
 
 // 加载所有数据（用于初始化和导入后刷新）
 async function loadAllData() {
@@ -728,10 +778,44 @@ async function testMcpConnection() {
 
 async function handleMcpToggle(id: string, enabled: boolean) {
   await toggleMcpServer(id, enabled);
-  mcpServers.value = await getAllMcpServers();
+  const storedMcpServers = await getAllMcpServers();
+  let mcpServersChanged = false;
+  const normalizedMcpServers = storedMcpServers.map((server) => {
+    const normalized = normalizePlaywrightGatewayServer(server);
+    if (normalized.url !== server.url) {
+      mcpServersChanged = true;
+    }
+    return normalized;
+  });
+  if (mcpServersChanged) {
+    for (const server of normalizedMcpServers) {
+      await saveMcpServer(server);
+    }
+  }
+  mcpServers.value = normalizedMcpServers;
   if (selectedMcpServerId.value === id) {
     mcpFormEnabled.value = enabled;
   }
+}
+
+async function installPlaywrightGateway() {
+  const existing = existingPlaywrightGateway.value;
+  if (existing) {
+    const normalized = normalizePlaywrightGatewayServer(existing);
+    if (normalized.url !== existing.url) {
+      await saveMcpServer(normalized as McpServerConfig);
+      mcpServers.value = await getAllMcpServers();
+    }
+    selectMcpServer(existing.id);
+    showToast(i18n('playwrightGatewayExists'));
+    return;
+  }
+
+  const server = createPlaywrightGatewayServerConfig(generateMcpServerId());
+  await saveMcpServer(server);
+  mcpServers.value = await getAllMcpServers();
+  selectMcpServer(server.id);
+  showToast(i18n('playwrightGatewayAdded'));
 }
 
 // ========== 预设操作管理函数 ==========
@@ -1120,6 +1204,55 @@ function showToast(message: string) {
         <div class="content-header">
           <h2>{{ i18n('mcpConfig') }}</h2>
           <p class="content-desc">{{ i18n('mcpConfigDesc') }}</p>
+        </div>
+        <div class="playwright-gateway-panel">
+          <div class="playwright-gateway-copy">
+            <div class="playwright-gateway-eyebrow">{{ i18n('playwrightGatewayTitle') }}</div>
+            <h3>{{ i18n('playwrightGatewayDesc') }}</h3>
+            <p class="playwright-gateway-hint">{{ i18n('playwrightGatewayBridgeHint') }}</p>
+          </div>
+          <div class="form-group playwright-gateway-token-group">
+            <label for="playwright-gateway-token">{{ i18n('playwrightGatewayTokenLabel') }}</label>
+            <input
+              id="playwright-gateway-token"
+              v-model="playwrightGatewayTokenInput"
+              type="password"
+              spellcheck="false"
+              autocapitalize="off"
+              autocomplete="off"
+              placeholder="PLAYWRIGHT_MCP_EXTENSION_TOKEN=..."
+            />
+            <p class="form-hint">{{ i18n('playwrightGatewayTokenHint') }}</p>
+            <p class="form-hint">{{ i18n('playwrightGatewayTargetTabHint') }}</p>
+          </div>
+          <div class="playwright-gateway-meta">
+            <div class="playwright-gateway-command-card">
+              <span class="playwright-gateway-command-label">{{ i18n('playwrightGatewayBackgroundLabel') }}</span>
+              <code>{{ playwrightGatewayBackgroundCommand }}</code>
+            </div>
+            <div class="playwright-gateway-command-card">
+              <span class="playwright-gateway-command-label">{{ i18n('playwrightGatewayStopLabel') }}</span>
+              <pre>{{ playwrightGatewayStopHint }}</pre>
+            </div>
+            <div class="playwright-gateway-endpoint">
+              <span>HTTP MCP</span>
+              <code>{{ PLAYWRIGHT_GATEWAY_DEFAULT_URL }}</code>
+            </div>
+          </div>
+          <div class="playwright-gateway-actions">
+            <a class="btn btn-secondary" :href="PLAYWRIGHT_MCP_BRIDGE_EXTENSION_URL" target="_blank" rel="noopener noreferrer">
+              {{ i18n('playwrightGatewayInstallBridge') }}
+            </a>
+            <button class="btn btn-outline" @click="copyPlaywrightGatewayCommand">
+              {{ i18n('playwrightGatewayCopyCommand') }}
+            </button>
+            <button class="btn btn-outline" @click="copyPlaywrightGatewayStopHint">
+              {{ i18n('playwrightGatewayCopyStop') }}
+            </button>
+            <button class="btn btn-primary" @click="installPlaywrightGateway">
+              {{ existingPlaywrightGateway ? i18n('playwrightGatewaySelect') : i18n('playwrightGatewayAdd') }}
+            </button>
+          </div>
         </div>
         <div class="content-body">
           <aside class="provider-sidebar">

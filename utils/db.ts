@@ -102,6 +102,25 @@ export interface ChatMessage {
   images?: ChatImage[];
 }
 
+export type AutomationLogStatus =
+  | 'pending_confirmation'
+  | 'running'
+  | 'success'
+  | 'error'
+  | 'cancelled';
+
+export interface AutomationLogEntry {
+  id: string;
+  toolName: string;
+  serverName?: string;
+  summary: string;
+  riskLevel: 'low' | 'medium' | 'high';
+  status: AutomationLogStatus;
+  createdAt: number;
+  updatedAt: number;
+  detail?: string;
+}
+
 export interface ApiMessageRecord {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: ApiMessageContent;
@@ -116,6 +135,7 @@ export interface ChatSession {
   id: string;
   title: string;
   messages: ChatMessage[];
+  automationLog?: AutomationLogEntry[];
   apiMessages?: ApiMessageRecord[];
   createdAt: number;
   updatedAt: number;
@@ -287,6 +307,7 @@ export async function createSession(providerId?: string): Promise<ChatSession> {
     id: crypto.randomUUID(),
     title: '新对话',
     messages: [],
+    automationLog: [],
     createdAt: Date.now(),
     updatedAt: Date.now(),
     providerId,
@@ -302,6 +323,7 @@ export async function updateSession(session: ChatSession): Promise<void> {
   const updated = {
     ...session,
     messages: JSON.parse(JSON.stringify(session.messages || [])),
+    automationLog: JSON.parse(JSON.stringify(session.automationLog || [])),
     updatedAt: Date.now(),
   };
   await db.put('chatSessions', updated);

@@ -65,6 +65,7 @@ Connect to external tool servers via [Model Context Protocol](https://modelconte
 
 - **MCP Server Connection** - Add and manage multiple HTTP MCP Servers
 - **Dynamic Tool Discovery** - Automatically fetch available tools from MCP Server and integrate into conversations
+- **Local Playwright Gateway** - Connect a local `@playwright/mcp` HTTP service and bind automation to the current browser tab through Playwright MCP Bridge
 - **Multiple Auth Methods**:
   - No authentication (public services)
   - Bearer Token authentication
@@ -174,6 +175,41 @@ npm run build:firefox
 2. Click to add an MCP Server
 3. Fill in Server URL and select authentication method
 4. Once connected, tools provided by MCP will be automatically integrated into conversations
+
+### Configure the Local Playwright Gateway
+
+1. Install the official **Playwright MCP Bridge** browser extension so Playwright can attach to the current browser tab
+2. Start the local gateway in the background:
+
+   - macOS
+   ```bash
+   nohup npx -y @playwright/mcp@latest --extension --host localhost --port 8931 --shared-browser-context > ~/playwright-mcp.log 2>&1 &
+   ```
+   - Windows PowerShell
+   ```powershell
+   Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-Command','npx -y @playwright/mcp@latest --extension --host localhost --port 8931 --shared-browser-context'
+   ```
+
+   If the Bridge extension opens the approval page and shows `PLAYWRIGHT_MCP_EXTENSION_TOKEN=...`, add that full environment-variable line to the launch command and restart the local gateway. This bypasses the approval page on later runs and helps avoid mid-connection disconnects.
+
+3. Open Tactus settings and review the `MCP` startup instructions
+4. Tactus will auto-detect `http://localhost:8931/mcp`
+5. If you want to keep it as a manual MCP entry, click `Save As MCP Config`
+6. If the Bridge still asks you to choose a page, select the real target tab you want to control, not the `Playwright MCP extension` `connect.html` page
+
+### Stop the Local Playwright Gateway
+
+- macOS
+```bash
+PID=$(lsof -ti :8931) && [ -n "$PID" ] && kill $PID
+```
+
+- Windows PowerShell
+```powershell
+$pids = Get-NetTCPConnection -LocalPort 8931 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique; if ($pids) { $pids | ForEach-Object { Stop-Process -Id $_ } }
+```
+
+This keeps the intended interaction intact: Tactus receives instructions in the right sidebar while the current page in the left browser tab performs the automation steps.
 
 ### Skill Folder Structure
 

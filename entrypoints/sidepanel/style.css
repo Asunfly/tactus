@@ -1691,6 +1691,115 @@ body {
   font-style: italic;
 }
 
+.automation-log-panel {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(184, 134, 11, 0.06), rgba(184, 134, 11, 0.02));
+}
+
+.automation-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.automation-log-count {
+  min-width: 24px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(184, 134, 11, 0.12);
+  text-align: center;
+}
+
+.automation-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.automation-log-item {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.automation-log-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.automation-log-summary {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--foreground);
+  line-height: 1.5;
+}
+
+.automation-log-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.automation-log-badge {
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
+
+.automation-log-badge.low {
+  background: rgba(47, 133, 90, 0.12);
+  color: #2F855A;
+}
+
+.automation-log-badge.medium {
+  background: rgba(180, 83, 9, 0.12);
+  color: #B45309;
+}
+
+.automation-log-badge.high {
+  background: rgba(220, 38, 38, 0.12);
+  color: #B91C1C;
+}
+
+.automation-log-badge.status {
+  background: rgba(184, 134, 11, 0.12);
+  color: var(--accent);
+}
+
+.automation-log-time {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.automation-log-detail {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted-foreground);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 
 /* ========== Script Confirm Modal ========== */
 .script-confirm-modal {

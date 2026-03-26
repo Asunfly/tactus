@@ -44,6 +44,7 @@ import {
   updateSession,
   deleteSession,
   generateSessionTitle,
+  type AutomationLogEntry,
   type ChatImage,
   type ChatMessage,
   type ChatSession,
@@ -56,7 +57,9 @@ import { getAllSkills, getSkillByName, getSkillFileAsText, type Skill } from '..
 import { executeScript, setScriptConfirmCallback, type ScriptConfirmationRequest } from '../../utils/skillsExecutor';
 import { t, type Translations } from '../../utils/i18n';
 import { mcpManager, type McpTool } from '../../utils/mcp';
-import { getEnabledMcpServers, watchMcpServers } from '../../utils/mcpStorage';
+import { getAllMcpServers, getEnabledMcpServers, watchMcpServers, type McpServerConfig } from '../../utils/mcpStorage';
+import { assessAutomationAction, isPlaywrightBrowserTool, type AutomationActionAssessment } from '../../utils/automationRisk';
+import { getPlaywrightGatewayRuntimeServer } from '../../utils/playwrightGateway';
 
 function escapeHtml(value: string): string {
   return value
@@ -745,11 +748,18 @@ const pendingScriptConfirm = ref<{
   request: ScriptConfirmationRequest;
   resolve: (result: { confirmed: boolean; trustForever: boolean }) => void;
 } | null>(null);
+const showAutomationConfirmModal = ref(false);
+const pendingAutomationConfirm = ref<{
+  assessment: AutomationActionAssessment;
+  resolve: (confirmed: boolean) => void;
+} | null>(null);
 
 // MCP state
 const mcpTools = ref<McpTool[]>([]);
 const mcpConnecting = ref(false);
 const unwatchMcpServers = ref<(() => void) | null>(null);
+const mcpServers = ref<McpServerConfig[]>([]);
+const automationLogs = computed(() => currentSession.value?.automationLog || []);
 
 // Computed
 const activeProvider = computed(() => {
@@ -834,6 +844,79 @@ function formatSessionDate(timestamp: number): string {
     hour: '2-digit',
     minute: '2-digit'
   });
+}
+
+function getAutomationRiskLabel(riskLevel: AutomationLogEntry['riskLevel']): string {
+  switch (riskLevel) {
+    case 'high':
+      return i18n('automationRiskHigh');
+    case 'medium':
+      return i18n('automationRiskMedium');
+    default:
+      return i18n('automationRiskLow');
+  }
+}
+
+function getAutomationStatusLabel(status: AutomationLogEntry['status']): string {
+  switch (status) {
+    case 'pending_confirmation':
+      return i18n('automationStatusPendingConfirmation');
+    case 'running':
+      return i18n('automationStatusRunning');
+    case 'success':
+      return i18n('automationStatusSuccess');
+    case 'error':
+      return i18n('automationStatusError');
+    case 'cancelled':
+      return i18n('automationStatusCancelled');
+    default:
+      return status;
+  }
+}
+
+function ensureAutomationLogStore(): AutomationLogEntry[] {
+  if (!currentSession.value) return [];
+  if (!Array.isArray(currentSession.value.automationLog)) {
+    currentSession.value.automationLog = [];
+  }
+  return currentSession.value.automationLog;
+}
+
+function createAutomationLogEntry(input: Omit<AutomationLogEntry, 'id' | 'createdAt' | 'updatedAt'>): string {
+  const logs = ensureAutomationLogStore();
+  const now = Date.now();
+  const entry: AutomationLogEntry = {
+    ...input,
+    id: crypto.randomUUID(),
+    createdAt: now,
+    updatedAt: now,
+  };
+  logs.unshift(entry);
+  return entry.id;
+}
+
+function updateAutomationLogEntry(logId: string, patch: Partial<AutomationLogEntry>): void {
+  const logs = ensureAutomationLogStore();
+  const index = logs.findIndex(entry => entry.id === logId);
+  if (index < 0) return;
+  logs[index] = {
+    ...logs[index],
+    ...patch,
+    updatedAt: Date.now(),
+  };
+}
+
+async function requestAutomationConfirmation(assessment: AutomationActionAssessment): Promise<boolean> {
+  return new Promise((resolve) => {
+    pendingAutomationConfirm.value = { assessment, resolve };
+    showAutomationConfirmModal.value = true;
+  });
+}
+
+function buildAutomationDetail(detail: string): string {
+  const normalized = detail.trim();
+  if (!normalized) return '';
+  return normalized.length > 280 ? `${normalized.slice(0, 280)}...` : normalized;
 }
 
 function isEditableElement(target: EventTarget | null): boolean {
@@ -1125,13 +1208,15 @@ onMounted(async () => {
   
   // 加载已安装的 Skills
   installedSkills.value = await getAllSkills();
+  mcpServers.value = await getAllMcpServers();
   await initializeSharePagePreference();
   
   // 初始化 MCP 连接
   await initMcpConnections();
   
   // 监听 MCP Server 配置变化
-  unwatchMcpServers.value = watchMcpServers(async () => {
+  unwatchMcpServers.value = watchMcpServers(async (servers) => {
+    mcpServers.value = servers;
     await initMcpConnections();
   });
   
@@ -1266,10 +1351,15 @@ async function initMcpConnections() {
     
     // 获取启用的 MCP Server 配置
     const enabledServers = await getEnabledMcpServers();
+    const runtimeServers = [...enabledServers];
+    const builtinPlaywrightGateway = getPlaywrightGatewayRuntimeServer(mcpServers.value.map(server => ({ ...server })));
+    if (builtinPlaywrightGateway && !runtimeServers.some(server => server.id === builtinPlaywrightGateway.id)) {
+      runtimeServers.unshift(builtinPlaywrightGateway);
+    }
     
     // 连接每个 Server 并收集工具
     const allTools: McpTool[] = [];
-    for (const server of enabledServers) {
+    for (const server of runtimeServers) {
       try {
         const tools = await mcpManager.connect(server);
         allTools.push(...tools);
@@ -1312,6 +1402,10 @@ const currentThemeIcon = computed(() => {
 onUnmounted(() => {
   chatAbortController.value?.abort();
   chatAbortController.value = null;
+  if (pendingAutomationConfirm.value) {
+    pendingAutomationConfirm.value.resolve(false);
+    pendingAutomationConfirm.value = null;
+  }
   unwatchProviders.value?.();
   unwatchActiveProviderId.value?.();
   unwatchLanguage.value?.();
@@ -1467,6 +1561,59 @@ async function extractCleanPageContent(): Promise<string> {
 }
 
 // 工具执行器
+async function executePlaywrightMcpTool(
+  serverId: string,
+  serverName: string,
+  toolName: string,
+  toolCall: ToolCall,
+): Promise<ToolResult> {
+  const assessment = assessAutomationAction(toolName, toolCall.arguments);
+  const logId = createAutomationLogEntry({
+    toolName,
+    serverName,
+    summary: assessment.summary,
+    riskLevel: assessment.riskLevel,
+    status: assessment.requiresConfirmation ? 'pending_confirmation' : 'running',
+    detail: assessment.reason,
+  });
+
+  if (assessment.requiresConfirmation) {
+    const confirmed = await requestAutomationConfirmation(assessment);
+    if (!confirmed) {
+      updateAutomationLogEntry(logId, {
+        status: 'cancelled',
+        detail: currentLanguage.value === 'zh-CN' ? '用户取消了该高风险操作。' : 'User cancelled this high-risk action.',
+      });
+      return {
+        tool_call_id: toolCall.id,
+        name: toolCall.name,
+        result: currentLanguage.value === 'zh-CN'
+          ? '用户取消了该高风险自动化操作，请不要自动重试，除非用户再次明确要求继续。'
+          : 'User cancelled this high-risk automation action. Do not retry unless the user explicitly asks to continue.',
+        success: true,
+      };
+    }
+
+    updateAutomationLogEntry(logId, {
+      status: 'running',
+      detail: currentLanguage.value === 'zh-CN' ? '用户已确认，正在执行。' : 'User confirmed. Running now.',
+    });
+  }
+
+  const mcpResult = await mcpManager.callTool(serverId, toolName, toolCall.arguments);
+  updateAutomationLogEntry(logId, {
+    status: mcpResult.success ? 'success' : 'error',
+    detail: buildAutomationDetail(mcpResult.content),
+  });
+
+  return {
+    tool_call_id: toolCall.id,
+    name: toolCall.name,
+    result: mcpResult.content,
+    success: mcpResult.success,
+  };
+}
+
 const toolExecutor: ToolExecutor = async (toolCall: ToolCall): Promise<ToolResult> => {
   switch (toolCall.name) {
     case 'extract_page_content': {
@@ -1588,6 +1735,20 @@ ${skill.references.length > 0
       if (isMcpTool(toolCall.name)) {
         const parsed = parseMcpToolName(toolCall.name);
         if (parsed) {
+          const targetServer = mcpTools.value.find(tool =>
+            tool.serverId === parsed.serverId && tool.name === parsed.toolName,
+          );
+          const serverName = targetServer?.serverName || parsed.serverId;
+
+          if (isPlaywrightBrowserTool(parsed.toolName)) {
+            return executePlaywrightMcpTool(
+              parsed.serverId,
+              serverName,
+              parsed.toolName,
+              toolCall,
+            );
+          }
+
           const mcpResult = await mcpManager.callTool(
             parsed.serverId,
             parsed.toolName,
@@ -1618,6 +1779,7 @@ async function saveCurrentSession() {
   const sessionToSave: ChatSession = {
     ...currentSession.value,
     messages: JSON.parse(JSON.stringify(messages.value)),
+    automationLog: JSON.parse(JSON.stringify(currentSession.value.automationLog || [])),
     apiMessages: JSON.parse(JSON.stringify(getLastApiMessages())), // 持久化 API 上下文
   };
   await updateSession(sessionToSave);
@@ -1929,7 +2091,10 @@ async function openHistory() {
 
 // Load session
 async function loadSession(session: ChatSession) {
-  currentSession.value = session;
+  currentSession.value = {
+    ...session,
+    automationLog: session.automationLog || [],
+  };
   messages.value = session.messages;
   // 恢复 API 上下文
   if (session.apiMessages) {
@@ -2088,6 +2253,22 @@ function rejectScript() {
     pendingScriptConfirm.value.resolve({ confirmed: false, trustForever: false });
     pendingScriptConfirm.value = null;
     showScriptConfirmModal.value = false;
+  }
+}
+
+function confirmAutomationAction() {
+  if (pendingAutomationConfirm.value) {
+    pendingAutomationConfirm.value.resolve(true);
+    pendingAutomationConfirm.value = null;
+    showAutomationConfirmModal.value = false;
+  }
+}
+
+function rejectAutomationAction() {
+  if (pendingAutomationConfirm.value) {
+    pendingAutomationConfirm.value.resolve(false);
+    pendingAutomationConfirm.value = null;
+    showAutomationConfirmModal.value = false;
   }
 }
 </script>
@@ -2320,6 +2501,26 @@ function rejectScript() {
         </div>
         <span v-if="toolStatus">{{ toolStatus }}</span>
         <span v-else>{{ i18n('thinking') }}</span>
+      </div>
+
+      <div v-if="automationLogs.length > 0" class="automation-log-panel">
+        <div class="automation-log-header">
+          <span>{{ i18n('automationLogTitle') }}</span>
+          <span class="automation-log-count">{{ automationLogs.length }}</span>
+        </div>
+        <div class="automation-log-list">
+          <div v-for="entry in automationLogs" :key="entry.id" class="automation-log-item">
+            <div class="automation-log-main">
+              <div class="automation-log-summary">{{ entry.summary }}</div>
+              <div class="automation-log-meta">
+                <span class="automation-log-badge" :class="entry.riskLevel">{{ getAutomationRiskLabel(entry.riskLevel) }}</span>
+                <span class="automation-log-badge status">{{ getAutomationStatusLabel(entry.status) }}</span>
+                <span class="automation-log-time">{{ formatTime(entry.updatedAt) }}</span>
+              </div>
+            </div>
+            <div v-if="entry.detail" class="automation-log-detail">{{ entry.detail }}</div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -2643,6 +2844,36 @@ function rejectScript() {
             <button class="btn btn-outline" @click="rejectScript">{{ i18n('cancel') }}</button>
             <button class="btn btn-secondary" @click="confirmScript(false)">{{ currentLanguage === 'zh-CN' ? '执行一次' : 'Run Once' }}</button>
             <button class="btn btn-primary" @click="confirmScript(true)">{{ currentLanguage === 'zh-CN' ? '信任并执行' : 'Trust & Run' }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showAutomationConfirmModal && pendingAutomationConfirm" class="modal-overlay">
+      <div class="modal script-confirm-modal">
+        <div class="modal-header">
+          <h2>{{ i18n('automationConfirmTitle') }}</h2>
+        </div>
+        <div class="modal-body">
+          <div class="script-confirm-info">
+            <p>{{ i18n('automationConfirmDesc') }}</p>
+            <div class="script-name-display">{{ pendingAutomationConfirm.assessment.summary }}</div>
+          </div>
+          <div class="script-preview">
+            <div class="script-preview-label">{{ i18n('automationConfirmActionLabel') }}</div>
+            <pre>{{ pendingAutomationConfirm.assessment.summary }}</pre>
+          </div>
+          <div class="script-confirm-warning">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+              <line x1="12" y1="9" x2="12" y2="13"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            <span>{{ i18n('automationConfirmReasonLabel') }}：{{ pendingAutomationConfirm.assessment.reason }}</span>
+          </div>
+          <div class="script-confirm-actions">
+            <button class="btn btn-outline" @click="rejectAutomationAction">{{ i18n('cancel') }}</button>
+            <button class="btn btn-primary" @click="confirmAutomationAction">{{ i18n('automationContinue') }}</button>
           </div>
         </div>
       </div>
