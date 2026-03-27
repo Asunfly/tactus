@@ -214,9 +214,25 @@ export default defineBackground(() => {
         return new InternalPlaywrightBridgeBackground({
           createSocket: (url) => new WebSocket(url),
           debuggerApi,
+          tabsApi: {
+            create: (createProperties) => browser.tabs.create(createProperties),
+            get: (tabId) => browser.tabs.get(tabId),
+            remove: (tabId) => browser.tabs.remove(tabId),
+            query: (queryInfo) => browser.tabs.query(queryInfo),
+          },
         });
       })()
     : null;
+
+  (globalThis as any).__TACTUS_TEST_HOOKS__ = {
+    ensureInternalPlaywrightBridgeBinding: async (message: any) => {
+      if (!internalPlaywrightBridge) {
+        throw new Error('Internal Playwright bridge is unavailable');
+      }
+      await internalPlaywrightBridge.ensureBinding(message);
+      return { success: true };
+    },
+  };
 
   // 监听 sidepanel 连接
   browser.runtime.onConnect.addListener((port) => {

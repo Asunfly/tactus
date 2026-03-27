@@ -6,6 +6,8 @@ import {
   createInternalPlaywrightRelayEndpoints,
   getInternalPlaywrightBridgeTargetTabId,
   getInternalPlaywrightTabsAction,
+  isInternalPlaywrightBridgeAllowedUrl,
+  resolveInternalPlaywrightBridgeTarget,
   renderInternalPlaywrightTabsMarkdown,
 } from './internalPlaywrightBridge';
 
@@ -65,6 +67,73 @@ describe('getInternalPlaywrightBridgeTargetTabId', () => {
 
   it('两者都不存在时返回 null', () => {
     expect(getInternalPlaywrightBridgeTargetTabId(null, null, null)).toBeNull();
+  });
+});
+
+describe('isInternalPlaywrightBridgeAllowedUrl', () => {
+  it('允许普通网页', () => {
+    expect(isInternalPlaywrightBridgeAllowedUrl('https://example.com')).toBe(true);
+    expect(isInternalPlaywrightBridgeAllowedUrl('http://localhost:3000')).toBe(true);
+  });
+
+  it('拒绝浏览器内页和扩展页', () => {
+    expect(isInternalPlaywrightBridgeAllowedUrl('chrome://extensions')).toBe(false);
+    expect(isInternalPlaywrightBridgeAllowedUrl('chrome-extension://abcd/options.html')).toBe(false);
+    expect(isInternalPlaywrightBridgeAllowedUrl('devtools://devtools/bundled/inspector.html')).toBe(false);
+    expect(isInternalPlaywrightBridgeAllowedUrl('edge://extensions')).toBe(false);
+    expect(isInternalPlaywrightBridgeAllowedUrl('about:blank')).toBe(false);
+    expect(isInternalPlaywrightBridgeAllowedUrl(undefined)).toBe(false);
+  });
+});
+
+describe('resolveInternalPlaywrightBridgeTarget', () => {
+  const tabs = [
+    { id: 11, active: false, url: 'https://example.com/a', title: 'A' },
+    { id: 22, active: true, url: 'https://example.com/b', title: 'B' },
+    { id: 33, active: false, url: 'chrome://extensions', title: 'Extensions' },
+  ];
+
+  it('优先使用已经绑定且可调试的 tab', () => {
+    expect(resolveInternalPlaywrightBridgeTarget({
+      boundTabId: 11,
+      lockedTabId: 22,
+      tabs,
+    })).toMatchObject({
+      status: 'ready',
+      source: 'bound',
+      tab: { id: 11 },
+      activeTab: { id: 22 },
+    });
+  });
+
+  it('当前活动页不可调试时会回退到其他可调试 tab', () => {
+    expect(resolveInternalPlaywrightBridgeTarget({
+      boundTabId: null,
+      lockedTabId: null,
+      tabs: [
+        { id: 33, active: true, url: 'chrome://extensions', title: 'Extensions' },
+        { id: 11, active: false, url: 'https://example.com/a', title: 'A' },
+      ],
+    })).toMatchObject({
+      status: 'ready',
+      source: 'fallback',
+      tab: { id: 11 },
+      activeTab: { id: 33 },
+    });
+  });
+
+  it('没有任何可调试 tab 时返回 blocked', () => {
+    expect(resolveInternalPlaywrightBridgeTarget({
+      boundTabId: null,
+      lockedTabId: null,
+      tabs: [
+        { id: 33, active: true, url: 'chrome://extensions', title: 'Extensions' },
+        { id: 44, active: false, url: 'devtools://devtools/bundled/inspector.html', title: 'DevTools' },
+      ],
+    })).toEqual({
+      status: 'blocked',
+      activeTab: { id: 33, active: true, url: 'chrome://extensions', title: 'Extensions' },
+    });
   });
 });
 

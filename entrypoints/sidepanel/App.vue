@@ -56,7 +56,7 @@ import { shouldSubmitOnEnter } from '../../utils/enterSubmit';
 import { getAllSkills, getSkillByName, getSkillFileAsText, type Skill } from '../../utils/skills';
 import { executeScript, setScriptConfirmCallback, type ScriptConfirmationRequest } from '../../utils/skillsExecutor';
 import { t, type Translations } from '../../utils/i18n';
-import { mcpManager, type McpTool } from '../../utils/mcp';
+import { mcpManager, type McpTool, type McpToolCallResult } from '../../utils/mcp';
 import { getAllMcpServers, getEnabledMcpServers, watchMcpServers, type McpServerConfig } from '../../utils/mcpStorage';
 import { assessAutomationAction, isPlaywrightBrowserTool, type AutomationActionAssessment } from '../../utils/automationRisk';
 import {
@@ -68,8 +68,14 @@ import {
   createInternalPlaywrightBridgeBindMessage,
   getInternalPlaywrightBridgeTargetTabId,
   getInternalPlaywrightTabsAction,
+  isInternalPlaywrightBridgeAllowedUrl,
+  resolveInternalPlaywrightBridgeTarget,
   renderInternalPlaywrightTabsMarkdown,
 } from '../../utils/internalPlaywrightBridge';
+import {
+  executePlaywrightTool,
+  type PlaywrightInternalBridgePreparation,
+} from '../../utils/playwrightToolExecutor';
 
 function escapeHtml(value: string): string {
   return value
@@ -357,7 +363,7 @@ async function resolveInternalPlaywrightBridgeTargetTab() {
   if (preferredTabId) {
     try {
       const tab = await browser.tabs.get(preferredTabId);
-      if (tab?.id) {
+      if (tab?.id && isInternalPlaywrightBridgeAllowedUrl(tab.url)) {
         return {
           tabId: tab.id,
           windowId: tab.windowId,
@@ -369,12 +375,57 @@ async function resolveInternalPlaywrightBridgeTargetTab() {
   }
 
   const [activeTab] = await browser.tabs.query({ active: true, currentWindow: true });
-  if (!activeTab?.id) return null;
+  if (activeTab?.id && isInternalPlaywrightBridgeAllowedUrl(activeTab.url)) {
+    return {
+      tabId: activeTab.id,
+      windowId: activeTab.windowId,
+    };
+  }
+
+  const tabs = await browser.tabs.query({ currentWindow: true });
+  const fallbackTab = tabs.find(tab => tab.id && isInternalPlaywrightBridgeAllowedUrl(tab.url));
+  if (!fallbackTab?.id) return null;
 
   return {
-    tabId: activeTab.id,
-    windowId: activeTab.windowId,
+    tabId: fallbackTab.id,
+    windowId: fallbackTab.windowId,
   };
+}
+
+function getInternalPlaywrightTabLabel(tab: { id?: number; title?: string | null; url?: string | null }) {
+  return tab.title?.trim() || tab.url?.trim() || `Tab ${tab.id ?? 'unknown'}`;
+}
+
+function buildInternalPlaywrightFallbackNote(targetTab: { id?: number; title?: string | null; url?: string | null }) {
+  const label = getInternalPlaywrightTabLabel(targetTab);
+  return currentLanguage.value === 'zh-CN'
+    ? `当前页面不可调试，已自动切换到“${label}”继续执行。`
+    : `The current page is not debuggable. Automatically switched to "${label}" to continue.`;
+}
+
+function buildInternalPlaywrightTargetSwitchNote(targetTab: { id?: number; title?: string | null; url?: string | null }) {
+  const label = getInternalPlaywrightTabLabel(targetTab);
+  return currentLanguage.value === 'zh-CN'
+    ? `已切换到“${label}”并在该标签页继续执行。`
+    : `Switched to "${label}" and continued in that tab.`;
+}
+
+function buildInternalPlaywrightBlockedMessage(activeTab?: { url?: string | null } | null) {
+  const currentPageBlocked = activeTab?.url && !isInternalPlaywrightBridgeAllowedUrl(activeTab.url);
+  if (currentLanguage.value === 'zh-CN') {
+    return currentPageBlocked
+      ? '当前页面是浏览器内部页或扩展页，且当前窗口里没有可调试的网页标签页。请切到普通网页后再试。'
+      : '当前窗口里没有可调试的网页标签页。请先打开一个普通网页后再试。';
+  }
+  return currentPageBlocked
+    ? 'The current page is a browser-internal or extension page, and there are no debuggable web tabs in this window. Switch to a normal webpage and try again.'
+    : 'There are no debuggable web tabs in this window. Open a normal webpage and try again.';
+}
+
+function buildInternalPlaywrightNewTabNote() {
+  return currentLanguage.value === 'zh-CN'
+    ? '当前没有可调试网页，已自动新建一个可调试标签页继续执行。'
+    : 'No debuggable webpage was available, so a new debuggable tab was created automatically.';
 }
 
 async function ensureInternalPlaywrightBridgeBinding(): Promise<number | null> {
@@ -407,7 +458,7 @@ async function bindInternalPlaywrightTab(tabId: number, windowId?: number | null
   return tabId;
 }
 
-async function reconnectPlaywrightGatewayServer(server: McpServerConfig): Promise<void> {
+async function reconnectMcpServer(server: McpServerConfig): Promise<void> {
   const preservedTools = mcpTools.value.filter(tool => tool.serverId !== server.id);
   await mcpManager.disconnect(server.id);
 
@@ -418,6 +469,26 @@ async function reconnectPlaywrightGatewayServer(server: McpServerConfig): Promis
     mcpTools.value = preservedTools;
     throw error;
   }
+}
+
+function getMcpServerRuntimeConfig(serverId: string): McpServerConfig | null {
+  const runtimeServer = getPlaywrightGatewayRuntimeServerSnapshot();
+  if (runtimeServer && (serverId === runtimeServer.id || serverId === PLAYWRIGHT_GATEWAY_BUILTIN_ID)) {
+    return runtimeServer;
+  }
+
+  return mcpServers.value.find(server => server.id === serverId) ?? null;
+}
+
+async function reconnectPlaywrightServerById(serverId: string): Promise<boolean> {
+  const server = getMcpServerRuntimeConfig(serverId);
+  if (!server) return false;
+  await reconnectMcpServer(server);
+  return true;
+}
+
+async function capturePlaywrightSnapshot(serverId: string): Promise<McpToolCallResult> {
+  return mcpManager.callTool(serverId, 'browser_snapshot', {});
 }
 
 async function ensurePlaywrightGatewayReadyForCurrentTab(forceReconnect = false): Promise<void> {
@@ -432,7 +503,7 @@ async function ensurePlaywrightGatewayReadyForCurrentTab(forceReconnect = false)
   }
 
   internalPlaywrightBridgeBoundTabId.value = boundTabId;
-  await reconnectPlaywrightGatewayServer(runtimeServer);
+  await reconnectMcpServer(runtimeServer);
 }
 
 async function openNewInternalPlaywrightTab(): Promise<number> {
@@ -560,24 +631,67 @@ async function executeInternalPlaywrightTabsTool(
   };
 }
 
-async function ensureInternalPlaywrightBridgeForTool(toolName: string): Promise<void> {
+async function ensureInternalPlaywrightBridgeForTool(toolName: string): Promise<PlaywrightInternalBridgePreparation> {
   const runtimeServer = getPlaywrightGatewayRuntimeServerSnapshot();
-  if (!runtimeServer) return;
-
-  if (toolName === 'browser_navigate' && !internalPlaywrightBridgeBoundTabId.value) {
-    const newTabId = await openNewInternalPlaywrightTab();
-    const response = await browser.runtime.sendMessage(createInternalPlaywrightBridgeBindMessage({
-      tabId: newTabId,
-    }));
-    if (!response?.success) {
-      throw new Error(response?.error || '内置 Playwright bridge 绑定失败');
-    }
-    internalPlaywrightBridgeBoundTabId.value = newTabId;
-    await reconnectPlaywrightGatewayServer(runtimeServer);
-    return;
+  if (!runtimeServer) {
+    return { ok: true };
   }
 
-  await ensurePlaywrightGatewayReadyForCurrentTab(false);
+  const tabs = await browser.tabs.query({ currentWindow: true });
+  const resolution = resolveInternalPlaywrightBridgeTarget({
+    boundTabId: internalPlaywrightBridgeBoundTabId.value,
+    lockedTabId: lockedTabId.value,
+    tabs,
+  });
+
+  if (resolution.status === 'blocked') {
+    if (toolName === 'browser_navigate') {
+      const newTabId = await openNewInternalPlaywrightTab();
+      const newTab = await browser.tabs.get(newTabId);
+      await bindInternalPlaywrightTab(newTabId, newTab.windowId);
+      await reconnectMcpServer(runtimeServer);
+      return {
+        ok: true,
+        note: buildInternalPlaywrightNewTabNote(),
+      };
+    }
+
+    return {
+      ok: false,
+      detail: buildInternalPlaywrightBlockedMessage(resolution.activeTab),
+    };
+  }
+
+  const shouldActivateTargetTab = resolution.activeTab?.id !== resolution.tab.id;
+  if (shouldActivateTargetTab) {
+    await browser.tabs.update(resolution.tab.id, { active: true });
+  }
+
+  const needsReconnect = !mcpManager.isConnected(runtimeServer.id)
+    || internalPlaywrightBridgeBoundTabId.value !== resolution.tab.id;
+
+  if (needsReconnect) {
+    await bindInternalPlaywrightTab(resolution.tab.id, resolution.tab.windowId);
+    await reconnectMcpServer(runtimeServer);
+  }
+
+  if (resolution.source === 'fallback') {
+    return {
+      ok: true,
+      note: buildInternalPlaywrightFallbackNote(resolution.tab),
+    };
+  }
+
+  if (shouldActivateTargetTab) {
+    return {
+      ok: true,
+      note: buildInternalPlaywrightTargetSwitchNote(resolution.tab),
+    };
+  }
+
+  return {
+    ok: true,
+  };
 }
 
 // 计算属性
@@ -1824,73 +1938,29 @@ async function executePlaywrightMcpTool(
   toolName: string,
   toolCall: ToolCall,
 ): Promise<ToolResult> {
-  const assessment = assessAutomationAction(toolName, toolCall.arguments);
-  const logId = createAutomationLogEntry({
-    toolName,
+  return executePlaywrightTool({
+    language: currentLanguage.value,
+    serverId,
     serverName,
-    summary: assessment.summary,
-    riskLevel: assessment.riskLevel,
-    status: assessment.requiresConfirmation ? 'pending_confirmation' : 'running',
-    detail: assessment.reason,
+    toolName,
+    toolCall,
+    createLogEntry: createAutomationLogEntry,
+    updateLogEntry: updateAutomationLogEntry,
+    buildAutomationDetail,
+    requestAutomationConfirmation,
+    isInternalGatewayServer: isInternalPlaywrightGatewayServer,
+    executeInternalTabsTool: executeInternalPlaywrightTabsTool,
+    ensureInternalBridgeForTool: ensureInternalPlaywrightBridgeForTool,
+    ensureInternalGatewayReady: ensurePlaywrightGatewayReadyForCurrentTab,
+    recoverMissingPage: async () => {
+      const newTabId = await openNewInternalPlaywrightTab();
+      const newTab = await browser.tabs.get(newTabId);
+      await bindInternalPlaywrightTab(newTabId, newTab.windowId);
+    },
+    reconnectServer: reconnectPlaywrightServerById,
+    callTool: (targetServerId, targetToolName, args) => mcpManager.callTool(targetServerId, targetToolName, args),
+    captureSnapshot: capturePlaywrightSnapshot,
   });
-
-  if (assessment.requiresConfirmation) {
-    const confirmed = await requestAutomationConfirmation(assessment);
-    if (!confirmed) {
-      updateAutomationLogEntry(logId, {
-        status: 'cancelled',
-        detail: currentLanguage.value === 'zh-CN' ? '用户取消了该高风险操作。' : 'User cancelled this high-risk action.',
-      });
-      return {
-        tool_call_id: toolCall.id,
-        name: toolCall.name,
-        result: currentLanguage.value === 'zh-CN'
-          ? '用户取消了该高风险自动化操作，请不要自动重试，除非用户再次明确要求继续。'
-          : 'User cancelled this high-risk automation action. Do not retry unless the user explicitly asks to continue.',
-        success: true,
-      };
-    }
-
-    updateAutomationLogEntry(logId, {
-      status: 'running',
-      detail: currentLanguage.value === 'zh-CN' ? '用户已确认，正在执行。' : 'User confirmed. Running now.',
-    });
-  }
-
-  if (isInternalPlaywrightGatewayServer(serverId)) {
-    try {
-      const tabsResult = await executeInternalPlaywrightTabsTool(serverId, toolCall, logId);
-      if (tabsResult) {
-        return tabsResult;
-      }
-      await ensureInternalPlaywrightBridgeForTool(toolName);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      updateAutomationLogEntry(logId, {
-        status: 'error',
-        detail: message,
-      });
-      return {
-        tool_call_id: toolCall.id,
-        name: toolCall.name,
-        result: `工具调用失败: ${message}`,
-        success: false,
-      };
-    }
-  }
-
-  const mcpResult = await mcpManager.callTool(serverId, toolName, toolCall.arguments);
-  updateAutomationLogEntry(logId, {
-    status: mcpResult.success ? 'success' : 'error',
-    detail: buildAutomationDetail(mcpResult.content),
-  });
-
-  return {
-    tool_call_id: toolCall.id,
-    name: toolCall.name,
-    result: mcpResult.content,
-    success: mcpResult.success,
-  };
 }
 
 const toolExecutor: ToolExecutor = async (toolCall: ToolCall): Promise<ToolResult> => {

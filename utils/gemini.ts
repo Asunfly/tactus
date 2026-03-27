@@ -17,6 +17,7 @@ import {
   getToolStatusText,
 } from './tools';
 import type { ChatMessage } from './db';
+import { shouldBlindRetryToolExecutionFailure } from './toolExecutionPolicy';
 
 // ============ Gemini Types ============
 
@@ -923,6 +924,7 @@ export async function* streamChatGemini(
         },
       }));
 
+      const assistantMessageStartIndex = currentMessages.length;
       currentMessages.push({
         role: 'assistant',
         content: fullContent || null,
@@ -960,7 +962,20 @@ export async function* streamChatGemini(
         const result = await toolExecutor(toolCall);
         yield { type: 'tool_result', result };
 
+        currentMessages.push({
+          role: 'tool',
+          content: result.result,
+          tool_call_id: tc.id,
+          name: tc.name,
+        });
+
+        setLastApiMessages([...currentMessages]);
+
         if (!result.success) {
+          if (!shouldBlindRetryToolExecutionFailure(toolCall)) {
+            continue;
+          }
+
           hasExecutionError = true;
           toolCallRetryCount++;
 
@@ -979,19 +994,10 @@ export async function* streamChatGemini(
           };
           break;
         }
-
-        currentMessages.push({
-          role: 'tool',
-          content: result.result,
-          tool_call_id: tc.id,
-          name: tc.name,
-        });
-
-        setLastApiMessages([...currentMessages]);
       }
 
       if (hasExecutionError) {
-        currentMessages.pop();
+        currentMessages.splice(assistantMessageStartIndex);
         continue;
       }
 

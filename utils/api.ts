@@ -17,6 +17,7 @@ import {
 import type { McpTool } from './mcp';
 import { streamChatAnthropic, streamChatAnthropicSimple, fetchAnthropicModels } from './anthropic';
 import { streamChatGemini, streamChatGeminiSimple, fetchGeminiModels } from './gemini';
+import { shouldBlindRetryToolExecutionFailure } from './toolExecutionPolicy';
 
 export interface ModelInfo {
   id: string;
@@ -781,6 +782,7 @@ export async function* streamChat(
         },
       }));
       
+      const assistantMessageStartIndex = currentMessages.length;
       currentMessages.push({
         role: 'assistant',
         content: fullContent || null,
@@ -822,7 +824,21 @@ export async function* streamChat(
         yield { type: 'tool_result', result };
         
         // 检查工具执行是否失败
+        currentMessages.push({
+          role: 'tool',
+          content: result.result,
+          tool_call_id: tc.id,
+          name: tc.name,
+        });
+        
+        // 实时更新 API 上下文（记录 tool result）
+        lastApiMessages = [...currentMessages];
+
         if (!result.success) {
+          if (!shouldBlindRetryToolExecutionFailure(toolCall)) {
+            continue;
+          }
+
           hasExecutionError = true;
           toolCallRetryCount++;
           console.warn(`[Tool Execution Error] 工具执行失败 (${toolCallRetryCount}/${maxToolCallRetries})`);
@@ -848,23 +864,11 @@ export async function* streamChat(
           // 跳出工具执行循环，准备重试
           break;
         }
-        
-        // 添加工具结果消息
-        currentMessages.push({
-          role: 'tool',
-          content: result.result,
-          tool_call_id: tc.id,
-          name: tc.name,
-        });
-        
-        // 实时更新 API 上下文（记录 tool result）
-        lastApiMessages = [...currentMessages];
       }
       
       // 如果有执行错误，剔除本次 assistant 消息，重试
       if (hasExecutionError) {
-        // 移除刚才添加的 assistant 消息
-        currentMessages.pop();
+        currentMessages.splice(assistantMessageStartIndex);
         continue;
       }
       

@@ -3,6 +3,8 @@
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { WebSocketServer } from 'ws';
+import { InternalCDPRelayRuntime } from './relayRuntime.mjs';
+import { normalizePlaywrightProtocolError } from './protocolError.mjs';
 
 const MCP_DEFAULT_PORT = process.env.PLAYWRIGHT_GATEWAY_PORT || '8931';
 const RELAY_DEFAULT_PORT = process.env.PLAYWRIGHT_RELAY_PORT || '8932';
@@ -128,9 +130,17 @@ class InternalCDPRelayServer {
     this.relayHost = relayHost;
     this.playwrightConnection = null;
     this.extensionConnection = null;
-    this.connectedTabInfo = undefined;
-    this.nextSessionId = 1;
     this.extensionWaiter = createDeferred();
+    this.runtime = new InternalCDPRelayRuntime({
+      waitForExtensionConnection: () => this.waitForExtensionConnection(),
+      callExtension: async (method, params) => {
+        if (!this.extensionConnection) {
+          throw new Error('Internal Playwright bridge is not connected');
+        }
+        return this.extensionConnection.send(method, params);
+      },
+      sendToPlaywright: (message) => this.sendToPlaywright(message),
+    });
 
     this.httpServer = http.createServer();
     this.wss = new WebSocketServer({ server: this.httpServer });
@@ -170,7 +180,6 @@ class InternalCDPRelayServer {
   }
 
   resetExtensionConnection() {
-    this.connectedTabInfo = undefined;
     this.extensionConnection = null;
     this.extensionWaiter = createDeferred();
     this.extensionWaiter.promise.catch(() => {});
@@ -220,9 +229,7 @@ class InternalCDPRelayServer {
               return undefined;
             }
           })(),
-          error: {
-            message: error instanceof Error ? error.message : String(error),
-          },
+          error: normalizePlaywrightProtocolError(error),
         });
       }
     });
@@ -242,18 +249,7 @@ class InternalCDPRelayServer {
 
     const connection = new ExtensionConnection(ws);
     connection.onmessage = (method, params) => {
-      if (method === 'tabReattached') {
-        this.handleTabReattached(params.targetInfo);
-        return;
-      }
-      if (method !== 'forwardCDPEvent') {
-        return;
-      }
-      this.sendToPlaywright({
-        method: params.method,
-        sessionId: params.sessionId || this.connectedTabInfo?.sessionId,
-        params: params.params,
-      });
+      void this.runtime.handleExtensionMessage(method, params);
     };
     connection.onclose = (reason) => {
       if (this.extensionConnection !== connection) return;
@@ -266,37 +262,6 @@ class InternalCDPRelayServer {
 
     this.extensionConnection = connection;
     this.extensionWaiter.resolve();
-  }
-
-  handleTabReattached(targetInfo) {
-    const previous = this.connectedTabInfo;
-    const next = {
-      targetInfo,
-      sessionId: `tactus-tab-${this.nextSessionId++}`,
-    };
-    this.connectedTabInfo = next;
-
-    if (previous) {
-      this.sendToPlaywright({
-        method: 'Target.detachedFromTarget',
-        params: {
-          sessionId: previous.sessionId,
-          targetId: previous.targetInfo?.targetId,
-        },
-      });
-    }
-
-    this.sendToPlaywright({
-      method: 'Target.attachedToTarget',
-      params: {
-        sessionId: next.sessionId,
-        targetInfo: {
-          ...next.targetInfo,
-          attached: true,
-        },
-        waitingForDebugger: false,
-      },
-    });
   }
 
   async waitForExtensionConnection(timeoutMs = 30000) {
@@ -312,57 +277,7 @@ class InternalCDPRelayServer {
   }
 
   async handlePlaywrightMessage(message) {
-    const { method, params, sessionId } = message;
-    switch (method) {
-      case 'Browser.getVersion':
-        return {
-          protocolVersion: '1.3',
-          product: 'Chrome/Tactus-Bridge',
-          userAgent: 'Tactus-Bridge-Server/1.0.0',
-        };
-      case 'Browser.setDownloadBehavior':
-        return {};
-      case 'Target.setAutoAttach': {
-        if (sessionId) {
-          break;
-        }
-        await this.waitForExtensionConnection();
-        const { targetInfo } = await this.extensionConnection.send('attachToTab', {});
-        this.connectedTabInfo = {
-          targetInfo,
-          sessionId: `tactus-tab-${this.nextSessionId++}`,
-        };
-        this.sendToPlaywright({
-          method: 'Target.attachedToTarget',
-          params: {
-            sessionId: this.connectedTabInfo.sessionId,
-            targetInfo: {
-              ...this.connectedTabInfo.targetInfo,
-              attached: true,
-            },
-            waitingForDebugger: false,
-          },
-        });
-        return {};
-      }
-      case 'Target.getTargetInfo':
-        return this.connectedTabInfo?.targetInfo;
-      default:
-        return await this.forwardToExtension(method, params, sessionId);
-    }
-  }
-
-  async forwardToExtension(method, params, sessionId) {
-    await this.waitForExtensionConnection();
-    if (!this.extensionConnection) {
-      throw new Error('Internal Playwright bridge is not connected');
-    }
-    const forwardedSessionId = this.connectedTabInfo?.sessionId === sessionId ? undefined : sessionId;
-    return await this.extensionConnection.send('forwardCDPCommand', {
-      sessionId: forwardedSessionId,
-      method,
-      params,
-    });
+    return await this.runtime.handlePlaywrightMessage(message);
   }
 
   sendToPlaywright(message) {
