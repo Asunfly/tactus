@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { WebSocketServer } from 'ws';
 import { InternalCDPRelayRuntime } from './relayRuntime.mjs';
 import { normalizePlaywrightProtocolError } from './protocolError.mjs';
+import { createNpmSpawnSpec } from './npmLauncher.mjs';
 
 const MCP_DEFAULT_PORT = process.env.PLAYWRIGHT_GATEWAY_PORT || '8931';
 const RELAY_DEFAULT_PORT = process.env.PLAYWRIGHT_RELAY_PORT || '8932';
@@ -293,10 +294,11 @@ const passThroughOnly = rawArgs.includes('--help')
   || rawArgs.includes('--version')
   || rawArgs.includes('-V');
 
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-
 if (passThroughOnly) {
-  const child = spawn(npmCommand, ['exec', '--yes', '--package=@playwright/mcp@latest', 'playwright-mcp', '--', ...rawArgs], {
+  const npmSpawnSpec = createNpmSpawnSpec({
+    args: ['exec', '--yes', '--package=@playwright/mcp@latest', 'playwright-mcp', '--', ...rawArgs],
+  });
+  const child = spawn(npmSpawnSpec.command, npmSpawnSpec.args, {
     stdio: 'inherit',
     env: process.env,
   });
@@ -336,13 +338,16 @@ if (passThroughOnly) {
     forwardedArgs.unshift('--host');
   }
 
-  const child = spawn(npmCommand, ['exec', '--yes', '--package=@playwright/mcp@latest', 'playwright-mcp', '--', ...forwardedArgs], {
+  const npmSpawnSpec = createNpmSpawnSpec({
+    args: ['exec', '--yes', '--package=@playwright/mcp@latest', 'playwright-mcp', '--', ...forwardedArgs],
+  });
+  const child = spawn(npmSpawnSpec.command, npmSpawnSpec.args, {
     stdio: 'inherit',
     env: process.env,
   });
 
   console.log('[tactus-playwright-gateway] relay:', relay.extensionEndpoint());
-  console.log('[tactus-playwright-gateway] launching:', `${npmCommand} exec --yes --package=@playwright/mcp@latest playwright-mcp -- ${forwardedArgs.join(' ')}`);
+  console.log('[tactus-playwright-gateway] launching:', `${npmSpawnSpec.command} ${npmSpawnSpec.args.join(' ')}`);
 
   const stopChild = (signal) => {
     relay.stop(`Gateway stopped by ${signal}`);

@@ -4,16 +4,20 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import {
+  createSmokeGatewaySpawnSpec,
+  loadPlaywrightChromium,
+  stopSmokeGatewayProcess,
+} from './playwrightBridgeSmokeRuntime.mjs';
 
 const REPO_ROOT = process.cwd();
-const PLAYWRIGHT_SKILL_DIR = process.env.PLAYWRIGHT_SKILL_DIR || '/Users/sunfly/.cc-switch/skills/playwright-skill';
-const requirePlaywright = createRequire(path.join(PLAYWRIGHT_SKILL_DIR, 'package.json'));
-const { chromium } = requirePlaywright('playwright');
+const { chromium, runtimeRoot: PLAYWRIGHT_RUNTIME_ROOT } = loadPlaywrightChromium({
+  repoRoot: REPO_ROOT,
+});
 
 const HOST = '127.0.0.1';
 const MCP_HOST = 'localhost';
@@ -279,7 +283,12 @@ async function main() {
   await fs.mkdir(outputDir, { recursive: true });
 
   const serverInfo = await startSmokeServer(SERVER_PORT);
-  const gateway = spawn('npm', ['run', 'mcp:playwright', '--', '--host', HOST, '--port', String(GATEWAY_PORT), '--relay-port', String(RELAY_PORT)], {
+  const gatewaySpawnSpec = createSmokeGatewaySpawnSpec({
+    host: HOST,
+    port: GATEWAY_PORT,
+    relayPort: RELAY_PORT,
+  });
+  const gateway = spawn(gatewaySpawnSpec.command, gatewaySpawnSpec.args, {
     cwd: REPO_ROOT,
     env: {
       ...process.env,
@@ -295,6 +304,7 @@ async function main() {
   try {
     await waitForHttp(MCP_URL);
     log('Gateway ready');
+    log(`Using Playwright runtime: ${PLAYWRIGHT_RUNTIME_ROOT}`);
 
     const launched = await launchExtensionContext(userDataDir, extensionDir);
     context = launched.context;
@@ -429,7 +439,7 @@ async function main() {
   } finally {
     await client?.close().catch(() => {});
     await context?.close().catch(() => {});
-    gateway.kill('SIGTERM');
+    await stopSmokeGatewayProcess(gateway).catch(() => {});
     await delay(500);
     await new Promise((resolve) => serverInfo.server.close(resolve));
     await fs.rm(uploadFile, { force: true }).catch(() => {});
