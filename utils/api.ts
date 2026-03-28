@@ -10,6 +10,7 @@ import {
   parseMcpToolName,
   type FunctionTool,
   type ToolCall,
+  type ToolExecutionContext,
   type ToolResult,
   type SkillInfo,
   type Language,
@@ -262,7 +263,7 @@ export async function fetchModels(baseUrl: string, apiKey: string, providerType?
 }
 
 // 工具执行器类型
-export type ToolExecutor = (toolCall: ToolCall) => Promise<ToolResult>;
+export type ToolExecutor = (toolCall: ToolCall, context?: ToolExecutionContext) => Promise<ToolResult>;
 
 // Function Calling 配置
 export interface FunctionCallingConfig {
@@ -270,6 +271,7 @@ export interface FunctionCallingConfig {
   toolExecutor?: ToolExecutor;
   maxIterations?: number;
   maxToolCalls?: number;
+  maxSelfHealRounds?: number;
   abortSignal?: AbortSignal;
 }
 

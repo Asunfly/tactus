@@ -13,7 +13,7 @@ import {
   shouldPreflightPlaywrightSnapshot,
 } from './playwrightToolRecovery';
 import type { Language } from './storage';
-import type { ToolCall, ToolResult } from './tools';
+import type { ToolCall, ToolExecutionContext, ToolResult } from './tools';
 
 export type PlaywrightAutomationLogStatus =
   | 'pending_confirmation'
@@ -44,6 +44,7 @@ export interface PlaywrightInternalBridgePreparation {
 
 export interface PlaywrightToolExecutorInput {
   language: Language;
+  executionContext?: ToolExecutionContext;
   serverId: string;
   serverName: string;
   toolName: string;
@@ -65,6 +66,7 @@ export interface PlaywrightToolExecutorInput {
 export async function executePlaywrightTool(input: PlaywrightToolExecutorInput): Promise<ToolResult> {
   const {
     language,
+    executionContext,
     serverId,
     serverName,
     toolName,
@@ -83,7 +85,9 @@ export async function executePlaywrightTool(input: PlaywrightToolExecutorInput):
     captureSnapshot,
   } = input;
 
-  const assessment = assessAutomationAction(toolName, toolCall.arguments);
+  const assessment = assessAutomationAction(toolName, toolCall.arguments, {
+    inSelfHealMode: executionContext?.inSelfHealMode ?? false,
+  });
   const logId = createLogEntry({
     toolName,
     serverName,

@@ -31,11 +31,35 @@ export interface ToolCall {
   arguments: Record<string, any>;
 }
 
+export interface ToolExecutionContext {
+  selfHealRound: number;
+  maxSelfHealRounds: number;
+  inSelfHealMode: boolean;
+}
+
+export interface ToolResultMeta {
+  outcome: 'success' | 'recoverable_error' | 'fatal_error';
+  recoveryLayer: 'runtime' | 'model' | 'user';
+  failureKind?:
+    | 'tool_args'
+    | 'tool_runtime'
+    | 'transport'
+    | 'permission'
+    | 'user_cancelled'
+    | 'budget_exhausted'
+    | 'unknown';
+  consumesSelfHealRound?: boolean;
+  disableFurtherToolCalls?: boolean;
+  requiresRetryConfirmation?: boolean;
+  riskLevel?: 'low' | 'medium' | 'high';
+}
+
 export interface ToolResult {
   tool_call_id: string;
   name: string;
   result: string;
   success: boolean;
+  meta?: ToolResultMeta;
 }
 
 // 工具状态提示文本（静态）

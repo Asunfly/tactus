@@ -8,6 +8,10 @@ export interface AutomationActionAssessment {
   reason: string;
 }
 
+export interface AutomationAssessmentOptions {
+  inSelfHealMode?: boolean;
+}
+
 const highRiskKeywords = [
   'submit',
   'delete',
@@ -21,6 +25,9 @@ const highRiskKeywords = [
   'purchase',
   'order',
   'checkout',
+  'commit',
+  'execute',
+  'run',
   '提交',
   '删除',
   '移除',
@@ -33,6 +40,8 @@ const highRiskKeywords = [
   '付款',
   '下单',
   '结算',
+  '执行',
+  '运行',
 ];
 
 function truncateText(value: unknown, maxLength = 48): string {
@@ -42,12 +51,22 @@ function truncateText(value: unknown, maxLength = 48): string {
   return trimmed.length > maxLength ? `${trimmed.slice(0, maxLength)}...` : trimmed;
 }
 
+function normalizeToolName(toolName: string): string {
+  if (!toolName.startsWith('mcp__')) {
+    return toolName;
+  }
+
+  const parts = toolName.split('__');
+  return parts.length >= 3 ? parts.slice(2).join('__') : toolName;
+}
+
 function pickTargetLabel(args: Record<string, any>): string {
   return truncateText(args.element)
     || truncateText(args.name)
     || truncateText(args.url)
     || truncateText(args.ref)
-    || '当前页面';
+    || truncateText(args.script_path)
+    || '当前目标';
 }
 
 function containsHighRiskKeyword(value: string): boolean {
@@ -84,67 +103,137 @@ function buildSummary(toolName: string, args: Record<string, any>): string {
       return `截取 ${target}`;
     case 'browser_close':
       return '关闭当前标签页';
+    case 'extract_page_content':
+      return '提取当前页面内容';
+    case 'activate_skill':
+      return `激活 Skill ${truncateText(args.skill_name) || ''}`.trim();
+    case 'execute_skill_script':
+      return `执行脚本 ${truncateText(args.script_path) || target}`;
+    case 'read_skill_file':
+      return `读取文件 ${truncateText(args.file_path) || target}`;
     default:
       return `执行 ${toolName}`;
   }
 }
 
 export function isPlaywrightBrowserTool(toolName: string): boolean {
-  return toolName.startsWith('browser_');
+  return normalizeToolName(toolName).startsWith('browser_');
 }
 
 export function assessAutomationAction(
   toolName: string,
   args: Record<string, any> = {},
+  options: AutomationAssessmentOptions = {},
 ): AutomationActionAssessment {
-  const summary = buildSummary(toolName, args);
-  const keywordSource = [args.element, args.name, args.url, args.ref, args.key]
+  const normalizedToolName = normalizeToolName(toolName);
+  const inSelfHealMode = options.inSelfHealMode ?? false;
+  const summary = buildSummary(normalizedToolName, args);
+  const keywordSource = [
+    normalizedToolName,
+    args.element,
+    args.name,
+    args.url,
+    args.ref,
+    args.key,
+    args.script_path,
+  ]
     .filter((value): value is string => typeof value === 'string')
     .join(' ');
 
-  if (toolName === 'browser_handle_dialog' && args.accept) {
+  if (normalizedToolName === 'execute_skill_script') {
     return {
       toolName,
-      summary,
+      summary: inSelfHealMode
+        ? `重新执行脚本 ${truncateText(args.script_path) || '当前脚本'}`
+        : summary,
       riskLevel: 'high',
-      requiresConfirmation: true,
-      reason: '高风险操作：接受浏览器弹窗通常意味着确认不可逆动作。',
-    };
-  }
-
-  if (toolName === 'browser_run_code') {
-    return {
-      toolName,
-      summary,
-      riskLevel: 'high',
-      requiresConfirmation: true,
-      reason: '高风险操作：执行自定义 Playwright 代码会直接操控页面。',
-    };
-  }
-
-  if (toolName === 'browser_click' && containsHighRiskKeyword(keywordSource)) {
-    return {
-      toolName,
-      summary,
-      riskLevel: 'high',
-      requiresConfirmation: true,
-      reason: '高风险操作：点击目标包含提交、删除、发送或支付等敏感关键词。',
+      requiresConfirmation: inSelfHealMode,
+      reason: inSelfHealMode
+        ? '高风险操作：当前处于自愈回合，重新执行脚本可能重复产生页面副作用，需要再次确认。'
+        : '高风险操作：Skill 脚本可以直接修改页面状态或触发提交流程。',
     };
   }
 
   if (
-    toolName === 'browser_click'
-    || toolName === 'browser_navigate'
-    || toolName === 'browser_drag'
-    || toolName === 'browser_file_upload'
-    || toolName === 'browser_close'
+    normalizedToolName === 'extract_page_content'
+    || normalizedToolName === 'activate_skill'
+    || normalizedToolName === 'read_skill_file'
+    || normalizedToolName === 'browser_snapshot'
+    || normalizedToolName === 'browser_console_messages'
+    || normalizedToolName === 'browser_network_requests'
+  ) {
+    return {
+      toolName,
+      summary,
+      riskLevel: 'low',
+      requiresConfirmation: false,
+      reason: '低风险操作：只读取上下文或执行可预期的轻量操作。',
+    };
+  }
+
+  if (normalizedToolName === 'browser_handle_dialog' && args.accept) {
+    return {
+      toolName,
+      summary,
+      riskLevel: 'high',
+      requiresConfirmation: true,
+      reason: inSelfHealMode
+        ? '高风险操作：当前处于自愈回合，再次接受弹窗可能重复确认不可逆动作。'
+        : '高风险操作：接受浏览器弹窗通常意味着确认不可逆动作。',
+    };
+  }
+
+  if (normalizedToolName === 'browser_run_code') {
+    return {
+      toolName,
+      summary,
+      riskLevel: 'high',
+      requiresConfirmation: true,
+      reason: inSelfHealMode
+        ? '高风险操作：当前处于自愈回合，重新执行自定义代码可能重复产生副作用。'
+        : '高风险操作：执行自定义 Playwright 代码会直接操控页面。',
+    };
+  }
+
+  if (normalizedToolName === 'browser_click' && containsHighRiskKeyword(keywordSource)) {
+    return {
+      toolName,
+      summary,
+      riskLevel: 'high',
+      requiresConfirmation: true,
+      reason: inSelfHealMode
+        ? '高风险操作：当前处于自愈回合，再次点击高风险目标可能造成重复提交、删除或支付。'
+        : '高风险操作：点击目标包含提交、删除、发送或支付等敏感关键词。',
+    };
+  }
+
+  if (
+    normalizedToolName === 'browser_click'
+    || normalizedToolName === 'browser_navigate'
+    || normalizedToolName === 'browser_drag'
+    || normalizedToolName === 'browser_file_upload'
+    || normalizedToolName === 'browser_close'
   ) {
     return {
       toolName,
       summary,
       riskLevel: 'medium',
-      requiresConfirmation: false,
-      reason: '中风险操作：会改变当前页面状态或浏览上下文。',
+      requiresConfirmation: inSelfHealMode,
+      reason: inSelfHealMode
+        ? '中风险操作：当前处于自愈回合，重新执行会再次改变页面状态，需要二次确认。'
+        : '中风险操作：会改变当前页面状态或浏览上下文。',
+    };
+  }
+
+  if (containsHighRiskKeyword(keywordSource)) {
+    return {
+      toolName,
+      summary,
+      riskLevel: 'high',
+      requiresConfirmation: true,
+      reason: inSelfHealMode
+        ? '高风险操作：当前处于自愈回合，再次执行带有敏感语义的工具可能导致重复副作用。'
+        : '高风险操作：工具名或目标包含敏感关键词。',
     };
   }
 
@@ -153,6 +242,6 @@ export function assessAutomationAction(
     summary,
     riskLevel: 'low',
     requiresConfirmation: false,
-    reason: '低风险操作：读取页面信息或执行可预期的轻量交互。',
+    reason: '低风险操作：只读取上下文或执行可预期的轻量操作。',
   };
 }

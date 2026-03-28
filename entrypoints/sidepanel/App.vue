@@ -51,7 +51,7 @@ import {
 } from '../../utils/db';
 import { streamChat, getLastApiMessages, setLastApiMessages, ApiError, type ToolExecutor, type ApiMessage } from '../../utils/api';
 import { extractPageContent, truncateContent } from '../../utils/pageExtractor';
-import { getToolStatusText, isMcpTool, parseMcpToolName, type ToolCall, type ToolResult, type SkillInfo } from '../../utils/tools';
+import { getToolStatusText, isMcpTool, parseMcpToolName, type ToolCall, type ToolExecutionContext, type ToolResult, type SkillInfo } from '../../utils/tools';
 import { shouldSubmitOnEnter } from '../../utils/enterSubmit';
 import { getAllSkills, getSkillByName, getSkillFileAsText, type Skill } from '../../utils/skills';
 import { executeScript, setScriptConfirmCallback, type ScriptConfirmationRequest } from '../../utils/skillsExecutor';
@@ -76,6 +76,7 @@ import {
   executePlaywrightTool,
   type PlaywrightInternalBridgePreparation,
 } from '../../utils/playwrightToolExecutor';
+import { executeToolWithSupervisor } from '../../utils/toolExecutionSupervisor';
 
 function escapeHtml(value: string): string {
   return value
@@ -990,6 +991,7 @@ async function regenerateResponse(): Promise<void> {
       toolExecutor,
       maxIterations: 10,
       maxToolCalls: maxToolCalls.value,
+      maxSelfHealRounds: 3,
       abortSignal: chatAbortController.value.signal,
     };
     
@@ -1932,14 +1934,20 @@ async function extractCleanPageContent(): Promise<string> {
 }
 
 // 工具执行器
+function isRecoverableGenericMcpTransportError(message: string): boolean {
+  return /Failed to fetch|未连接|not connected|NetworkError|ECONNREFUSED|ECONNRESET/i.test(message);
+}
+
 async function executePlaywrightMcpTool(
   serverId: string,
   serverName: string,
   toolName: string,
   toolCall: ToolCall,
+  executionContext?: ToolExecutionContext,
 ): Promise<ToolResult> {
   return executePlaywrightTool({
     language: currentLanguage.value,
+    executionContext,
     serverId,
     serverName,
     toolName,
@@ -1963,7 +1971,10 @@ async function executePlaywrightMcpTool(
   });
 }
 
-const toolExecutor: ToolExecutor = async (toolCall: ToolCall): Promise<ToolResult> => {
+async function executeRawToolCall(
+  toolCall: ToolCall,
+  _executionContext: ToolExecutionContext,
+): Promise<ToolResult> {
   switch (toolCall.name) {
     case 'extract_page_content': {
       const content = await extractCleanPageContent();
@@ -2046,6 +2057,16 @@ ${skill.references.length > 0
           ? JSON.stringify(execResult.output, null, 2)
           : `脚本执行失败: ${execResult.error}`,
         success: execResult.success,
+        meta: execResult.success
+          ? undefined
+          : (execResult.error?.includes('用户拒绝')
+              ? {
+                  outcome: 'fatal_error',
+                  recoveryLayer: 'user',
+                  failureKind: 'user_cancelled',
+                  disableFurtherToolCalls: true,
+                }
+              : undefined),
       };
     }
     case 'read_skill_file': {
@@ -2095,14 +2116,25 @@ ${skill.references.length > 0
               serverName,
               parsed.toolName,
               toolCall,
+              _executionContext,
             );
           }
 
-          const mcpResult = await mcpManager.callTool(
+          let mcpResult = await mcpManager.callTool(
             parsed.serverId,
             parsed.toolName,
             toolCall.arguments
           );
+          if (!mcpResult.success && isRecoverableGenericMcpTransportError(mcpResult.content)) {
+            const reconnected = await reconnectPlaywrightServerById(parsed.serverId).catch(() => false);
+            if (reconnected) {
+              mcpResult = await mcpManager.callTool(
+                parsed.serverId,
+                parsed.toolName,
+                toolCall.arguments,
+              );
+            }
+          }
           return {
             tool_call_id: toolCall.id,
             name: toolCall.name,
@@ -2117,9 +2149,53 @@ ${skill.references.length > 0
         name: toolCall.name,
         result: `未知工具: ${toolCall.name}`,
         success: false,
+        meta: {
+          outcome: 'recoverable_error',
+          recoveryLayer: 'model',
+          failureKind: 'unknown',
+        },
       };
     }
   }
+}
+
+const toolExecutor: ToolExecutor = async (
+  toolCall: ToolCall,
+  executionContext?: ToolExecutionContext,
+): Promise<ToolResult> => {
+  const context = executionContext || {
+    selfHealRound: 0,
+    maxSelfHealRounds: 3,
+    inSelfHealMode: false,
+  };
+
+  if (isMcpTool(toolCall.name)) {
+    const parsed = parseMcpToolName(toolCall.name);
+    if (parsed && isPlaywrightBrowserTool(parsed.toolName)) {
+      const targetServer = mcpTools.value.find(tool =>
+        tool.serverId === parsed.serverId && tool.name === parsed.toolName,
+      );
+      const serverName = targetServer?.serverName || parsed.serverId;
+      return executePlaywrightMcpTool(
+        parsed.serverId,
+        serverName,
+        parsed.toolName,
+        toolCall,
+        context,
+      );
+    }
+  }
+
+  return executeToolWithSupervisor({
+    language: currentLanguage.value,
+    toolCall,
+    context,
+    createLogEntry: createAutomationLogEntry,
+    updateLogEntry: updateAutomationLogEntry,
+    buildAutomationDetail,
+    requestAutomationConfirmation,
+    executeRawTool: executeRawToolCall,
+  });
 };
 
 // Save current session
@@ -2260,6 +2336,7 @@ async function sendMessage() {
       toolExecutor,
       maxIterations: 10,
       maxToolCalls: maxToolCalls.value,
+      maxSelfHealRounds: 3,
       abortSignal: chatAbortController.value.signal,
     };
 
