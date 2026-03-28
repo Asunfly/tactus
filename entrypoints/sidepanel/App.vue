@@ -69,6 +69,7 @@ import {
   getInternalPlaywrightBridgeTargetTabId,
   getInternalPlaywrightTabsAction,
   isInternalPlaywrightBridgeAllowedUrl,
+  isInternalPlaywrightBridgePreferredUrl,
   resolveInternalPlaywrightBridgeTarget,
   renderInternalPlaywrightTabsMarkdown,
 } from '../../utils/internalPlaywrightBridge';
@@ -364,7 +365,7 @@ async function resolveInternalPlaywrightBridgeTargetTab() {
   if (preferredTabId) {
     try {
       const tab = await browser.tabs.get(preferredTabId);
-      if (tab?.id && isInternalPlaywrightBridgeAllowedUrl(tab.url)) {
+      if (tab?.id && isInternalPlaywrightBridgePreferredUrl(tab.url)) {
         return {
           tabId: tab.id,
           windowId: tab.windowId,

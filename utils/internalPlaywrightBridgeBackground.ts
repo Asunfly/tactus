@@ -209,13 +209,13 @@ export class InternalPlaywrightBridgeBackground {
           connection.socket.send(JSON.stringify({
             method: 'tabReattached',
             params: {
-              tabId: nextTabId,
+              tabId: tabState.tabId,
               targetInfo: targetInfo?.targetInfo ?? targetInfo,
             },
           }));
         }
         response.result = {
-          tabId: nextTabId,
+          tabId: tabState.tabId,
           targetInfo: targetInfo?.targetInfo ?? targetInfo,
         };
       } else if (message.method === 'createTab') {

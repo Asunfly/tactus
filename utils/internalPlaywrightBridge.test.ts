@@ -122,6 +122,68 @@ describe('resolveInternalPlaywrightBridgeTarget', () => {
     });
   });
 
+  it('已绑定 tab 失效时会回退到锁定中的可调试 tab', () => {
+    expect(resolveInternalPlaywrightBridgeTarget({
+      boundTabId: 33,
+      lockedTabId: 11,
+      tabs,
+    })).toMatchObject({
+      status: 'ready',
+      source: 'locked',
+      tab: { id: 11 },
+      activeTab: { id: 22 },
+    });
+  });
+
+  it('已明确绑定到 about:blank 时，仍然继续使用该 tab 作为当前任务目标', () => {
+    expect(resolveInternalPlaywrightBridgeTarget({
+      boundTabId: 99,
+      lockedTabId: null,
+      tabs: [
+        { id: 99, active: true, url: 'about:blank', title: 'Blank' },
+        { id: 11, active: false, url: 'https://example.com/a', title: 'A' },
+      ],
+    })).toMatchObject({
+      status: 'ready',
+      source: 'bound',
+      tab: { id: 99, url: 'about:blank' },
+      activeTab: { id: 99 },
+    });
+  });
+
+  it('只有活动页是 about:blank 时，不会直接绑定空白页，而是回退到真正的网页标签页', () => {
+    expect(resolveInternalPlaywrightBridgeTarget({
+      boundTabId: null,
+      lockedTabId: null,
+      tabs: [
+        { id: 99, active: true, url: 'about:blank', title: 'Blank' },
+        { id: 11, active: false, url: 'https://example.com/a', title: 'A' },
+      ],
+    })).toMatchObject({
+      status: 'ready',
+      source: 'fallback',
+      tab: { id: 11, url: 'https://example.com/a' },
+      activeTab: { id: 99, url: 'about:blank' },
+    });
+  });
+
+  it('普通 fallback 仍然忽略无关的 about:blank，优先选择真正的网页标签页', () => {
+    expect(resolveInternalPlaywrightBridgeTarget({
+      boundTabId: null,
+      lockedTabId: null,
+      tabs: [
+        { id: 88, active: true, url: 'chrome://extensions', title: 'Extensions' },
+        { id: 99, active: false, url: 'about:blank', title: 'Blank' },
+        { id: 11, active: false, url: 'https://example.com/a', title: 'A' },
+      ],
+    })).toMatchObject({
+      status: 'ready',
+      source: 'fallback',
+      tab: { id: 11, url: 'https://example.com/a' },
+      activeTab: { id: 88 },
+    });
+  });
+
   it('没有任何可调试 tab 时返回 blocked', () => {
     expect(resolveInternalPlaywrightBridgeTarget({
       boundTabId: null,

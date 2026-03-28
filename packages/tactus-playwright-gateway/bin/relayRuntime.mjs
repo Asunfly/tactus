@@ -78,6 +78,7 @@ export class InternalCDPRelayRuntime {
           emitAttachedEvent: true,
           emitCreatedEvent: true,
           emitInfoChangedEvent: true,
+          deferLifecycleEvents: true,
           setCurrent: true,
         });
         return {
@@ -195,36 +196,44 @@ export class InternalCDPRelayRuntime {
       this.currentTargetId = targetInfo.targetId;
     }
 
-    if (options.emitCreatedEvent && !existing) {
-      this.sendToPlaywright({
-        method: 'Target.targetCreated',
-        params: {
-          targetInfo,
-        },
-      });
-    }
-
-    if (options.emitInfoChangedEvent) {
-      this.sendToPlaywright({
-        method: 'Target.targetInfoChanged',
-        params: {
-          targetInfo,
-        },
-      });
-    }
-
-    if (options.emitAttachedEvent && (!existing || options.forceAttachedEvent)) {
-      this.sendToPlaywright({
-        method: 'Target.attachedToTarget',
-        params: {
-          sessionId,
-          targetInfo: {
-            ...targetInfo,
-            attached: true,
+    const dispatchLifecycleEvents = () => {
+      if (options.emitCreatedEvent && !existing) {
+        this.sendToPlaywright({
+          method: 'Target.targetCreated',
+          params: {
+            targetInfo,
           },
-          waitingForDebugger: false,
-        },
-      });
+        });
+      }
+
+      if (options.emitInfoChangedEvent) {
+        this.sendToPlaywright({
+          method: 'Target.targetInfoChanged',
+          params: {
+            targetInfo,
+          },
+        });
+      }
+
+      if (options.emitAttachedEvent && (!existing || options.forceAttachedEvent)) {
+        this.sendToPlaywright({
+          method: 'Target.attachedToTarget',
+          params: {
+            sessionId,
+            targetInfo: {
+              ...targetInfo,
+              attached: true,
+            },
+            waitingForDebugger: false,
+          },
+        });
+      }
+    };
+
+    if (options.deferLifecycleEvents) {
+      setTimeout(dispatchLifecycleEvents, 0);
+    } else {
+      dispatchLifecycleEvents();
     }
 
     return target;

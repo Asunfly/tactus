@@ -74,6 +74,13 @@ export function isInternalPlaywrightBridgeAllowedUrl(url: string | undefined | n
     && !url.startsWith('about:blank');
 }
 
+export function isInternalPlaywrightBridgePreferredUrl(url: string | undefined | null): boolean {
+  if (url === 'about:blank') {
+    return true;
+  }
+  return isInternalPlaywrightBridgeAllowedUrl(url);
+}
+
 export function resolveInternalPlaywrightBridgeTarget(input: {
   boundTabId: number | null;
   lockedTabId: number | null;
@@ -98,7 +105,10 @@ export function resolveInternalPlaywrightBridgeTarget(input: {
   for (const candidate of preferredCandidates) {
     if (!candidate.tabId) continue;
     const tab = tabsById.get(candidate.tabId);
-    if (tab && isInternalPlaywrightBridgeAllowedUrl(tab.url)) {
+    const matches = candidate.source === 'active'
+      ? isInternalPlaywrightBridgeAllowedUrl(tab?.url)
+      : isInternalPlaywrightBridgePreferredUrl(tab?.url);
+    if (tab && matches) {
       return {
         status: 'ready',
         source: candidate.source,

@@ -486,6 +486,64 @@ describe('InternalPlaywrightBridgeBackground', () => {
     });
   });
 
+  it('bindToTab 指向不可调试页面时会自动回退到真实可调试 tab，并把实际 tabId 返回给 relay', async () => {
+    let socket!: FakeSocket;
+    const debuggerApi = createDebuggerApi();
+    const manager = new InternalPlaywrightBridgeBackground({
+      createSocket: () => {
+        socket = new FakeSocket();
+        queueMicrotask(() => socket.emitOpen());
+        return socket;
+      },
+      debuggerApi: debuggerApi.api,
+      tabsApi: createTabsApi().api,
+    });
+
+    await manager.ensureBinding(createInternalPlaywrightBridgeBindMessage({ tabId: 22 }));
+    socket.sent = [];
+
+    socket.emitMessage({
+      id: 12,
+      method: 'bindToTab',
+      params: {
+        tabId: 66,
+        emitLifecycleEvent: true,
+      },
+    });
+    await flushMicrotasks();
+
+    expect(debuggerApi.attachCalls.at(-1)).toEqual({
+      debuggee: { tabId: 11 },
+      version: '1.3',
+    });
+
+    const messages = socket.sent.map(entry => JSON.parse(entry));
+    expect(messages).toContainEqual({
+      method: 'tabReattached',
+      params: {
+        tabId: 11,
+        targetInfo: {
+          targetId: 'tab-11',
+          type: 'page',
+          title: 'Example',
+          url: 'https://example.com',
+        },
+      },
+    });
+    expect(messages).toContainEqual({
+      id: 12,
+      result: {
+        tabId: 11,
+        targetInfo: {
+          targetId: 'tab-11',
+          type: 'page',
+          title: 'Example',
+          url: 'https://example.com',
+        },
+      },
+    });
+  });
+
   it('dialog 已关闭后再收到 handleJavaScriptDialog 会直接返回空结果，不再转发到底层', async () => {
     let socket!: FakeSocket;
     const debuggerApi = createDebuggerApi();
