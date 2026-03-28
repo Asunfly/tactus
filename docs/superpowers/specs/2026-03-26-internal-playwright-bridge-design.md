@@ -41,7 +41,7 @@ MVP 采用“本地 relay + Tactus 内置 bridge”的双端方案：
 - 多 relay 会话调度
 - 断线自动恢复到新 tab
 - 用户态可视化“已绑定 tab”状态面板
-- 将本地 relay 单独打包成独立 npm 包
+- 将本地 relay 单独打包成独立 npm 包（后续计划见 `docs/superpowers/plans/2026-03-28-playwright-gateway-cli-packaging-plan.md`）
 
 ## 核心链路
 
