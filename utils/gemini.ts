@@ -17,7 +17,12 @@ import {
   getToolStatusText,
 } from './tools';
 import type { ChatMessage } from './db';
-import { shouldBlindRetryToolExecutionFailure } from './toolExecutionPolicy';
+import {
+  applyToolResultToLoopState,
+  buildToolArgumentParseErrorResult,
+  createInitialToolLoopState,
+  promoteToolResultToBudgetExhausted,
+} from './toolLoopState';
 
 // ============ Gemini Types ============
 
@@ -601,6 +606,7 @@ export async function* streamChatGemini(
   const toolExecutor = config?.toolExecutor;
   const maxIterations = config?.maxIterations || 5;
   const maxToolCalls = Math.max(1, config?.maxToolCalls || 100);
+  const maxSelfHealRounds = Math.max(1, config?.maxSelfHealRounds || 3);
   const allowImages = isVisionSupportedForModel(provider, provider.selectedModel);
   const abortSignal = config?.abortSignal;
   const ensureNotAborted = () => {
@@ -656,8 +662,7 @@ export async function* streamChatGemini(
 
   let iteration = 0;
   let currentMessages = [...apiMessages];
-  let toolCallRetryCount = 0;
-  const maxToolCallRetries = 3;
+  let toolLoopState = createInitialToolLoopState(maxSelfHealRounds);
   let executedToolCallCount = 0;
   geminiThoughtSignatureMap = new Map();
 
@@ -681,8 +686,9 @@ export async function* streamChatGemini(
       };
     }
 
-    if (geminiTools && geminiTools.length > 0) {
-      requestBody.tools = geminiTools;
+    const effectiveGeminiTools = toolLoopState.toolUseDisabled ? undefined : geminiTools;
+    if (effectiveGeminiTools && effectiveGeminiTools.length > 0) {
+      requestBody.tools = effectiveGeminiTools;
       requestBody.toolConfig = {
         functionCallingConfig: {
           mode: 'AUTO',
@@ -897,20 +903,51 @@ export async function* streamChatGemini(
       }
 
       if (hasParseError) {
-        toolCallRetryCount++;
-        if (toolCallRetryCount >= maxToolCallRetries) {
-          const error = new ApiError(
-            `工具调用失败：参数解析错误，已重试 ${maxToolCallRetries} 次`,
-            'TOOL_PARSE_ERROR',
-            false,
-          );
-          yield { type: 'error', error, retrying: false, attempt: toolCallRetryCount };
-          throw error;
+        const failedToolCall = toolCalls.find((tc) => {
+          try {
+            if (tc.arguments) JSON.parse(tc.arguments);
+            return false;
+          } catch {
+            return true;
+          }
+        });
+
+        if (failedToolCall) {
+          let parseResult = buildToolArgumentParseErrorResult({
+            toolCallId: failedToolCall.id,
+            toolName: failedToolCall.name,
+            rawArguments: failedToolCall.arguments || '',
+            errorMessage: 'Invalid JSON arguments',
+          });
+          const transition = applyToolResultToLoopState(toolLoopState, parseResult);
+          toolLoopState = transition.nextState;
+          if (transition.budgetExhausted) {
+            parseResult = promoteToolResultToBudgetExhausted(parseResult, toolLoopState);
+          }
+
+          currentMessages.push({
+            role: 'assistant',
+            content: fullContent || null,
+            tool_calls: toolCalls.map((tc) => ({
+              id: tc.id,
+              type: 'function' as const,
+              function: {
+                name: tc.name,
+                arguments: tc.arguments,
+              },
+            })),
+          });
+          currentMessages.push({
+            role: 'tool',
+            content: parseResult.result,
+            tool_call_id: failedToolCall.id,
+            name: failedToolCall.name,
+          });
+          setLastApiMessages([...currentMessages]);
+          yield { type: 'tool_result', result: parseResult };
+          continue;
         }
-        yield {
-          type: 'thinking',
-          message: `工具参数解析错误，正在重试 (${toolCallRetryCount}/${maxToolCallRetries})...`,
-        };
+
         continue;
       }
 
@@ -924,7 +961,6 @@ export async function* streamChatGemini(
         },
       }));
 
-      const assistantMessageStartIndex = currentMessages.length;
       currentMessages.push({
         role: 'assistant',
         content: fullContent || null,
@@ -959,7 +995,11 @@ export async function* streamChatGemini(
         yield { type: 'thinking', message: getToolStatusText(tc.name, parsedArgs) };
 
         executedToolCallCount++;
-        const result = await toolExecutor(toolCall);
+        let result = await toolExecutor(toolCall, {
+          selfHealRound: toolLoopState.usedSelfHealRounds,
+          maxSelfHealRounds: toolLoopState.maxSelfHealRounds,
+          inSelfHealMode: toolLoopState.usedSelfHealRounds > 0,
+        });
         yield { type: 'tool_result', result };
 
         currentMessages.push({
@@ -972,32 +1012,25 @@ export async function* streamChatGemini(
         setLastApiMessages([...currentMessages]);
 
         if (!result.success) {
-          if (!shouldBlindRetryToolExecutionFailure(toolCall)) {
-            continue;
+          const transition = applyToolResultToLoopState(toolLoopState, result);
+          toolLoopState = transition.nextState;
+          if (transition.budgetExhausted) {
+            result = promoteToolResultToBudgetExhausted(result, toolLoopState);
+            currentMessages[currentMessages.length - 1] = {
+              role: 'tool',
+              content: result.result,
+              tool_call_id: tc.id,
+              name: tc.name,
+            };
+            setLastApiMessages([...currentMessages]);
           }
 
           hasExecutionError = true;
-          toolCallRetryCount++;
-
-          if (toolCallRetryCount >= maxToolCallRetries) {
-            const error = new ApiError(
-              `工具执行失败：${result.result}，已重试 ${maxToolCallRetries} 次`,
-              'TOOL_EXECUTION_ERROR',
-              false,
-            );
-            yield { type: 'error', error, retrying: false, attempt: toolCallRetryCount };
-            throw error;
-          }
-          yield {
-            type: 'thinking',
-            message: `工具执行失败，正在重试 (${toolCallRetryCount}/${maxToolCallRetries})...`,
-          };
           break;
         }
       }
 
       if (hasExecutionError) {
-        currentMessages.splice(assistantMessageStartIndex);
         continue;
       }
 

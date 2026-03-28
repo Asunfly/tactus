@@ -18,7 +18,12 @@ import {
 import type { McpTool } from './mcp';
 import { streamChatAnthropic, streamChatAnthropicSimple, fetchAnthropicModels } from './anthropic';
 import { streamChatGemini, streamChatGeminiSimple, fetchGeminiModels } from './gemini';
-import { shouldBlindRetryToolExecutionFailure } from './toolExecutionPolicy';
+import {
+  applyToolResultToLoopState,
+  buildToolArgumentParseErrorResult,
+  createInitialToolLoopState,
+  promoteToolResultToBudgetExhausted,
+} from './toolLoopState';
 
 export interface ModelInfo {
   id: string;
@@ -479,6 +484,7 @@ export async function* streamChat(
   const toolExecutor = config?.toolExecutor;
   const maxIterations = config?.maxIterations || 5;
   const maxToolCalls = Math.max(1, config?.maxToolCalls || 100);
+  const maxSelfHealRounds = Math.max(1, config?.maxSelfHealRounds || 3);
   const allowImages = isVisionSupportedForModel(provider, provider.selectedModel);
   const abortSignal = config?.abortSignal;
   const ensureNotAborted = () => {
@@ -537,8 +543,9 @@ export async function* streamChat(
   
   let iteration = 0;
   let currentMessages = [...apiMessages];
-  let toolCallRetryCount = 0; // 工具调用重试计数（包括参数解析错误）
-  const maxToolCallRetries = 3; // 工具调用最大重试次数
+  let toolLoopState = createInitialToolLoopState(maxSelfHealRounds);
+  let toolCallRetryCount = 0;
+  const maxToolCallRetries = 3;
   let executedToolCallCount = 0;
   
   while (iteration < maxIterations) {
@@ -554,11 +561,12 @@ export async function* streamChat(
       const { controller, clear } = createTimeoutController(retryConfig.timeout, abortSignal);
       
       try {
+        const effectiveTools = toolLoopState.toolUseDisabled ? undefined : openaiTools;
         stream = await client.chat.completions.create({
           model: provider.selectedModel,
           messages: convertToOpenAIMessages(currentMessages),
-          tools: openaiTools,
-          tool_choice: openaiTools ? 'auto' : undefined,
+          tools: effectiveTools,
+          tool_choice: effectiveTools ? 'auto' : undefined,
           stream: true,
         }, {
           signal: controller.signal,
@@ -751,6 +759,52 @@ export async function* streamChat(
       
       // 如果有解析错误，剔除本次模型回复，直接重试
       if (hasParseError) {
+        const failedToolCall = toolCalls.find((tc) => {
+          try {
+            if (tc.arguments) JSON.parse(tc.arguments);
+            return false;
+          } catch {
+            return true;
+          }
+        });
+
+        if (failedToolCall) {
+          let parseResult = buildToolArgumentParseErrorResult({
+            toolCallId: failedToolCall.id,
+            toolName: failedToolCall.name,
+            rawArguments: failedToolCall.arguments || '',
+            errorMessage: 'Invalid JSON arguments',
+          });
+          const transition = applyToolResultToLoopState(toolLoopState, parseResult);
+          toolLoopState = transition.nextState;
+          if (transition.budgetExhausted) {
+            parseResult = promoteToolResultToBudgetExhausted(parseResult, toolLoopState);
+          }
+
+          currentMessages.push({
+            role: 'assistant',
+            content: fullContent || null,
+            reasoning: fullReasoning || null,
+            tool_calls: toolCalls.map(tc => ({
+              id: tc.id,
+              type: 'function' as const,
+              function: {
+                name: tc.name,
+                arguments: tc.arguments,
+              },
+            })),
+          });
+          currentMessages.push({
+            role: 'tool',
+            content: parseResult.result,
+            tool_call_id: failedToolCall.id,
+            name: failedToolCall.name,
+          });
+          lastApiMessages = [...currentMessages];
+          yield { type: 'tool_result', result: parseResult };
+          continue;
+        }
+
         toolCallRetryCount++;
         console.warn(`[Retry] 检测到工具参数解析错误，剔除模型回复后重试 (${toolCallRetryCount}/${maxToolCallRetries})`);
         
@@ -784,7 +838,6 @@ export async function* streamChat(
         },
       }));
       
-      const assistantMessageStartIndex = currentMessages.length;
       currentMessages.push({
         role: 'assistant',
         content: fullContent || null,
@@ -822,7 +875,11 @@ export async function* streamChat(
         
         // 执行工具
         executedToolCallCount++;
-        const result = await toolExecutor(toolCall);
+        let result = await toolExecutor(toolCall, {
+          selfHealRound: toolLoopState.usedSelfHealRounds,
+          maxSelfHealRounds: toolLoopState.maxSelfHealRounds,
+          inSelfHealMode: toolLoopState.usedSelfHealRounds > 0,
+        });
         yield { type: 'tool_result', result };
         
         // 检查工具执行是否失败
@@ -837,9 +894,21 @@ export async function* streamChat(
         lastApiMessages = [...currentMessages];
 
         if (!result.success) {
-          if (!shouldBlindRetryToolExecutionFailure(toolCall)) {
-            continue;
+          const transition = applyToolResultToLoopState(toolLoopState, result);
+          toolLoopState = transition.nextState;
+          if (transition.budgetExhausted) {
+            result = promoteToolResultToBudgetExhausted(result, toolLoopState);
+            currentMessages[currentMessages.length - 1] = {
+              role: 'tool',
+              content: result.result,
+              tool_call_id: tc.id,
+              name: tc.name,
+            };
+            lastApiMessages = [...currentMessages];
           }
+
+          hasExecutionError = true;
+          break;
 
           hasExecutionError = true;
           toolCallRetryCount++;
@@ -870,7 +939,6 @@ export async function* streamChat(
       
       // 如果有执行错误，剔除本次 assistant 消息，重试
       if (hasExecutionError) {
-        currentMessages.splice(assistantMessageStartIndex);
         continue;
       }
       
