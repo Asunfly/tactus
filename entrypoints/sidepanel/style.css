@@ -134,6 +134,13 @@ body {
   align-items: center;
 }
 
+.brand-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
 .header h1 {
   font-family: var(--font-display);
   font-size: 18px;
@@ -149,6 +156,17 @@ body {
 
 .header h1 .brand-link:hover {
   opacity: 0.85;
+}
+
+.brand-meta {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted-foreground);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
 }
 
 .header-actions {

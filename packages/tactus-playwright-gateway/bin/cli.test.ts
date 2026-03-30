@@ -335,4 +335,39 @@ describe('InternalCDPRelayRuntime', () => {
       params: { expression: '2 + 2' },
     });
   });
+
+  it('browser client 生命周期重置后，会清空旧 target/session 映射并从当前 extension tab 重新附着', async () => {
+    const { runtime, callExtension } = createRuntime();
+    await runtime.handlePlaywrightMessage({
+      id: 1,
+      method: 'Target.setAutoAttach',
+      params: { autoAttach: true, flatten: true },
+    });
+    await runtime.handlePlaywrightMessage({
+      id: 2,
+      method: 'Target.createTarget',
+      params: { url: 'https://example.com/new' },
+    });
+
+    runtime.resetBrowserSession();
+
+    await runtime.handlePlaywrightMessage({
+      id: 3,
+      method: 'Target.setAutoAttach',
+      params: { autoAttach: true, flatten: true },
+    });
+    await runtime.handlePlaywrightMessage({
+      id: 4,
+      method: 'Runtime.evaluate',
+      sessionId: 'tactus-tab-3',
+      params: { expression: '3 + 3' },
+    });
+
+    expect(callExtension).toHaveBeenLastCalledWith('forwardCDPCommand', {
+      tabId: 11,
+      sessionId: undefined,
+      method: 'Runtime.evaluate',
+      params: { expression: '3 + 3' },
+    });
+  });
 });

@@ -10,6 +10,12 @@ export class InternalCDPRelayRuntime {
     this.defaultBrowserContextId = 'tactus-default-context';
   }
 
+  resetBrowserSession() {
+    this.targetsByTargetId.clear();
+    this.targetIdBySessionId.clear();
+    this.currentTargetId = null;
+  }
+
   debug(...args) {
     if (process.env.TACTUS_PLAYWRIGHT_DEBUG === '1') {
       console.log('[tactus-relay]', ...args);

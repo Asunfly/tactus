@@ -59,24 +59,19 @@ import { t, type Translations } from '../../utils/i18n';
 import { mcpManager, type McpTool, type McpToolCallResult } from '../../utils/mcp';
 import { getAllMcpServers, getEnabledMcpServers, watchMcpServers, type McpServerConfig } from '../../utils/mcpStorage';
 import { assessAutomationAction, isPlaywrightBrowserTool, type AutomationActionAssessment } from '../../utils/automationRisk';
+import { BUILD_META_LABEL } from '../../utils/buildInfo';
 import {
   PLAYWRIGHT_GATEWAY_BUILTIN_ID,
   PLAYWRIGHT_GATEWAY_DEFAULT_NAME,
   getPlaywrightGatewayRuntimeServer,
 } from '../../utils/playwrightGateway';
+import { PlaywrightRuntimeController } from '../../utils/playwrightRuntimeController';
 import {
   createInternalPlaywrightBridgeBindMessage,
-  getInternalPlaywrightBridgeTargetTabId,
   getInternalPlaywrightTabsAction,
-  isInternalPlaywrightBridgeAllowedUrl,
-  isInternalPlaywrightBridgePreferredUrl,
-  resolveInternalPlaywrightBridgeTarget,
   renderInternalPlaywrightTabsMarkdown,
 } from '../../utils/internalPlaywrightBridge';
-import {
-  executePlaywrightTool,
-  type PlaywrightInternalBridgePreparation,
-} from '../../utils/playwrightToolExecutor';
+import { executePlaywrightTool } from '../../utils/playwrightToolExecutor';
 import { executeToolWithSupervisor } from '../../utils/toolExecutionSupervisor';
 
 function escapeHtml(value: string): string {
@@ -319,30 +314,31 @@ const copiedMessageIndex = ref<number | null>(null);
 // 复制按钮位置状态（按消息索引存储：'top' | 'bottom'）
 const copyButtonPosition = ref<Record<number, 'top' | 'bottom'>>({});
 
-// 标签页锁定状态 - 仅当 AI 正在回复时锁定
+// 标签页锁定状态 - 仅当 AI 正在回复且启用了页面共享时在界面上锁定
 const isTabLocked = computed(() => {
   return isLoading.value && sharePageContent.value;
 });
 
-// 锁定时记住的 tabId，确保内容获取和脚本执行在正确的标签页上执行
+// 当前任务锁定的 tabId，确保内容获取、脚本执行和自动化都基于同一目标页
 const lockedTabId = ref<number | null>(null);
 
-// 捕获当前活跃标签页 ID 并锁定
+// 任务开始时由 runtime 统一捕获当前活跃标签页，避免旧 bound tab 覆盖新任务意图
 async function captureLockedTab(): Promise<void> {
-  if (!sharePageContent.value) return;
   try {
-    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-    if (tab?.id) {
-      lockedTabId.value = tab.id;
-    }
+    await getPlaywrightRuntimeController().startTask();
   } catch (e) {
     console.error('Failed to capture locked tab:', e);
   }
 }
 
-// 释放锁定的标签页
+// 任务结束时由 runtime 统一释放 task 锁定，但保留 bound tab 作为下一轮 fallback
 function releaseLockedTab(): void {
-  lockedTabId.value = null;
+  try {
+    getPlaywrightRuntimeController().finishTask();
+  } catch (e) {
+    console.error('Failed to release locked tab:', e);
+    lockedTabId.value = null;
+  }
 }
 
 function getPlaywrightGatewayRuntimeServerSnapshot() {
@@ -356,97 +352,7 @@ function isInternalPlaywrightGatewayServer(serverId: string): boolean {
     || (serverId === PLAYWRIGHT_GATEWAY_BUILTIN_ID && runtimeServer.name === PLAYWRIGHT_GATEWAY_DEFAULT_NAME);
 }
 
-async function resolveInternalPlaywrightBridgeTargetTab() {
-  const preferredTabId = getInternalPlaywrightBridgeTargetTabId(
-    internalPlaywrightBridgeBoundTabId.value,
-    lockedTabId.value,
-    null,
-  );
-  if (preferredTabId) {
-    try {
-      const tab = await browser.tabs.get(preferredTabId);
-      if (tab?.id && isInternalPlaywrightBridgePreferredUrl(tab.url)) {
-        return {
-          tabId: tab.id,
-          windowId: tab.windowId,
-        };
-      }
-    } catch {
-      // Fall through to the current active tab query below.
-    }
-  }
-
-  const [activeTab] = await browser.tabs.query({ active: true, currentWindow: true });
-  if (activeTab?.id && isInternalPlaywrightBridgeAllowedUrl(activeTab.url)) {
-    return {
-      tabId: activeTab.id,
-      windowId: activeTab.windowId,
-    };
-  }
-
-  const tabs = await browser.tabs.query({ currentWindow: true });
-  const fallbackTab = tabs.find(tab => tab.id && isInternalPlaywrightBridgeAllowedUrl(tab.url));
-  if (!fallbackTab?.id) return null;
-
-  return {
-    tabId: fallbackTab.id,
-    windowId: fallbackTab.windowId,
-  };
-}
-
-function getInternalPlaywrightTabLabel(tab: { id?: number; title?: string | null; url?: string | null }) {
-  return tab.title?.trim() || tab.url?.trim() || `Tab ${tab.id ?? 'unknown'}`;
-}
-
-function buildInternalPlaywrightFallbackNote(targetTab: { id?: number; title?: string | null; url?: string | null }) {
-  const label = getInternalPlaywrightTabLabel(targetTab);
-  return currentLanguage.value === 'zh-CN'
-    ? `当前页面不可调试，已自动切换到“${label}”继续执行。`
-    : `The current page is not debuggable. Automatically switched to "${label}" to continue.`;
-}
-
-function buildInternalPlaywrightTargetSwitchNote(targetTab: { id?: number; title?: string | null; url?: string | null }) {
-  const label = getInternalPlaywrightTabLabel(targetTab);
-  return currentLanguage.value === 'zh-CN'
-    ? `已切换到“${label}”并在该标签页继续执行。`
-    : `Switched to "${label}" and continued in that tab.`;
-}
-
-function buildInternalPlaywrightBlockedMessage(activeTab?: { url?: string | null } | null) {
-  const currentPageBlocked = activeTab?.url && !isInternalPlaywrightBridgeAllowedUrl(activeTab.url);
-  if (currentLanguage.value === 'zh-CN') {
-    return currentPageBlocked
-      ? '当前页面是浏览器内部页或扩展页，且当前窗口里没有可调试的网页标签页。请切到普通网页后再试。'
-      : '当前窗口里没有可调试的网页标签页。请先打开一个普通网页后再试。';
-  }
-  return currentPageBlocked
-    ? 'The current page is a browser-internal or extension page, and there are no debuggable web tabs in this window. Switch to a normal webpage and try again.'
-    : 'There are no debuggable web tabs in this window. Open a normal webpage and try again.';
-}
-
-function buildInternalPlaywrightNewTabNote() {
-  return currentLanguage.value === 'zh-CN'
-    ? '当前没有可调试网页，已自动新建一个可调试标签页继续执行。'
-    : 'No debuggable webpage was available, so a new debuggable tab was created automatically.';
-}
-
-async function ensureInternalPlaywrightBridgeBinding(): Promise<number | null> {
-  const target = await resolveInternalPlaywrightBridgeTargetTab();
-  if (!target?.tabId) return null;
-
-  const response = await browser.runtime.sendMessage(createInternalPlaywrightBridgeBindMessage({
-    tabId: target.tabId,
-    windowId: target.windowId,
-  }));
-
-  if (!response?.success) {
-    throw new Error(response?.error || '内置 Playwright bridge 绑定失败');
-  }
-
-  return target.tabId;
-}
-
-async function bindInternalPlaywrightTab(tabId: number, windowId?: number | null): Promise<number> {
+async function sendInternalPlaywrightBridgeBindMessage(tabId: number, windowId?: number | null): Promise<void> {
   const response = await browser.runtime.sendMessage(createInternalPlaywrightBridgeBindMessage({
     tabId,
     ...(windowId ? { windowId } : {}),
@@ -455,9 +361,48 @@ async function bindInternalPlaywrightTab(tabId: number, windowId?: number | null
   if (!response?.success) {
     throw new Error(response?.error || '内置 Playwright bridge 绑定失败');
   }
+}
 
-  internalPlaywrightBridgeBoundTabId.value = tabId;
-  return tabId;
+let playwrightRuntimeController: PlaywrightRuntimeController | null = null;
+
+function getPlaywrightRuntimeController(): PlaywrightRuntimeController {
+  if (playwrightRuntimeController) {
+    return playwrightRuntimeController;
+  }
+
+  playwrightRuntimeController = new PlaywrightRuntimeController({
+    getLanguage: () => currentLanguage.value,
+    getRuntimeServer: () => getPlaywrightGatewayRuntimeServerSnapshot(),
+    isRuntimeServerConnected: (serverId) => mcpManager.isConnected(serverId),
+    reconnectRuntimeServer: async (server) => {
+      const runtimeServer = getMcpServerRuntimeConfig(server.id);
+      if (!runtimeServer) {
+        throw new Error('未找到 Playwright runtime server');
+      }
+      await reconnectMcpServer(runtimeServer);
+    },
+    getBoundTabId: () => internalPlaywrightBridgeBoundTabId.value,
+    setBoundTabId: (tabId) => {
+      internalPlaywrightBridgeBoundTabId.value = tabId;
+    },
+    getLockedTabId: () => lockedTabId.value,
+    setLockedTabId: (tabId) => {
+      lockedTabId.value = tabId;
+    },
+    queryTabs: (queryInfo) => browser.tabs.query(queryInfo),
+    getTab: (tabId) => browser.tabs.get(tabId),
+    removeTab: (tabId) => browser.tabs.remove(tabId),
+    updateTab: (tabId, updateProperties) => browser.tabs.update(tabId, updateProperties),
+    createTab: (createProperties) => browser.tabs.create(createProperties),
+    bindBridge: (tabId, windowId) => sendInternalPlaywrightBridgeBindMessage(tabId, windowId),
+    focusWindow: async (windowId) => {
+      const windowsApi = (browser as any).windows;
+      if (!windowsApi?.update) return;
+      await windowsApi.update(windowId, { focused: true });
+    },
+  });
+
+  return playwrightRuntimeController;
 }
 
 async function reconnectMcpServer(server: McpServerConfig): Promise<void> {
@@ -493,45 +438,8 @@ async function capturePlaywrightSnapshot(serverId: string): Promise<McpToolCallR
   return mcpManager.callTool(serverId, 'browser_snapshot', {});
 }
 
-async function ensurePlaywrightGatewayReadyForCurrentTab(forceReconnect = false): Promise<void> {
-  const runtimeServer = getPlaywrightGatewayRuntimeServerSnapshot();
-  if (!runtimeServer) return;
-
-  const boundTabId = await ensureInternalPlaywrightBridgeBinding();
-  if (!boundTabId) return;
-
-  if (!forceReconnect && internalPlaywrightBridgeBoundTabId.value === boundTabId && mcpManager.isConnected(runtimeServer.id)) {
-    return;
-  }
-
-  internalPlaywrightBridgeBoundTabId.value = boundTabId;
-  await reconnectMcpServer(runtimeServer);
-}
-
-async function openNewInternalPlaywrightTab(): Promise<number> {
-  const tab = await browser.tabs.create({
-    url: 'about:blank',
-    active: true,
-  });
-  if (!tab?.id) {
-    throw new Error('无法创建新的标签页');
-  }
-  return tab.id;
-}
-
 async function listInternalPlaywrightTabs() {
-  const tabs = await browser.tabs.query({ currentWindow: true });
-  const currentTabId = internalPlaywrightBridgeBoundTabId.value ?? null;
-  return tabs
-    .filter(tab => tab.id && tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('devtools://'))
-    .map(tab => ({
-      id: tab.id as number,
-      windowId: tab.windowId,
-      title: tab.title || tab.url || 'Untitled',
-      url: tab.url || 'about:blank',
-      current: tab.id === currentTabId,
-      active: Boolean(tab.active),
-    }));
+  return getPlaywrightRuntimeController().listTabs();
 }
 
 async function executeInternalPlaywrightTabsTool(
@@ -562,9 +470,7 @@ async function executeInternalPlaywrightTabsTool(
   }
 
   if (action === 'new') {
-    const newTabId = await openNewInternalPlaywrightTab();
-    const newTab = await browser.tabs.get(newTabId);
-    await bindInternalPlaywrightTab(newTabId, newTab.windowId);
+    await getPlaywrightRuntimeController().createBlankTab();
     const tabsAfterCreate = await listInternalPlaywrightTabs();
     updateAutomationLogEntry(logId, {
       status: 'success',
@@ -597,8 +503,9 @@ async function executeInternalPlaywrightTabsTool(
   }
 
   if (action === 'select') {
-    await browser.tabs.update(target.id, { active: true });
-    await bindInternalPlaywrightTab(target.id, target.windowId);
+    await getPlaywrightRuntimeController().bindExplicitTab(target.id, target.windowId, {
+      reason: 'tabs_select',
+    });
     const tabsAfterSelect = await listInternalPlaywrightTabs();
     updateAutomationLogEntry(logId, {
       status: 'success',
@@ -612,14 +519,8 @@ async function executeInternalPlaywrightTabsTool(
     };
   }
 
-  await browser.tabs.remove(target.id);
+  await getPlaywrightRuntimeController().closeTab(target.id);
   const tabsAfterClose = await listInternalPlaywrightTabs();
-  const fallbackTab = tabsAfterClose.find(tab => tab.active) ?? tabsAfterClose[0] ?? null;
-  if (fallbackTab) {
-    await bindInternalPlaywrightTab(fallbackTab.id, fallbackTab.windowId);
-  } else {
-    internalPlaywrightBridgeBoundTabId.value = null;
-  }
 
   updateAutomationLogEntry(logId, {
     status: 'success',
@@ -633,68 +534,6 @@ async function executeInternalPlaywrightTabsTool(
   };
 }
 
-async function ensureInternalPlaywrightBridgeForTool(toolName: string): Promise<PlaywrightInternalBridgePreparation> {
-  const runtimeServer = getPlaywrightGatewayRuntimeServerSnapshot();
-  if (!runtimeServer) {
-    return { ok: true };
-  }
-
-  const tabs = await browser.tabs.query({ currentWindow: true });
-  const resolution = resolveInternalPlaywrightBridgeTarget({
-    boundTabId: internalPlaywrightBridgeBoundTabId.value,
-    lockedTabId: lockedTabId.value,
-    tabs,
-  });
-
-  if (resolution.status === 'blocked') {
-    if (toolName === 'browser_navigate') {
-      const newTabId = await openNewInternalPlaywrightTab();
-      const newTab = await browser.tabs.get(newTabId);
-      await bindInternalPlaywrightTab(newTabId, newTab.windowId);
-      await reconnectMcpServer(runtimeServer);
-      return {
-        ok: true,
-        note: buildInternalPlaywrightNewTabNote(),
-      };
-    }
-
-    return {
-      ok: false,
-      detail: buildInternalPlaywrightBlockedMessage(resolution.activeTab),
-    };
-  }
-
-  const shouldActivateTargetTab = resolution.activeTab?.id !== resolution.tab.id;
-  if (shouldActivateTargetTab) {
-    await browser.tabs.update(resolution.tab.id, { active: true });
-  }
-
-  const needsReconnect = !mcpManager.isConnected(runtimeServer.id)
-    || internalPlaywrightBridgeBoundTabId.value !== resolution.tab.id;
-
-  if (needsReconnect) {
-    await bindInternalPlaywrightTab(resolution.tab.id, resolution.tab.windowId);
-    await reconnectMcpServer(runtimeServer);
-  }
-
-  if (resolution.source === 'fallback') {
-    return {
-      ok: true,
-      note: buildInternalPlaywrightFallbackNote(resolution.tab),
-    };
-  }
-
-  if (shouldActivateTargetTab) {
-    return {
-      ok: true,
-      note: buildInternalPlaywrightTargetSwitchNote(resolution.tab),
-    };
-  }
-
-  return {
-    ok: true,
-  };
-}
 
 // 计算属性
 const isEditing = computed(() => editingMessageIndex.value !== null);
@@ -1732,9 +1571,6 @@ async function initMcpConnections() {
     const allTools: McpTool[] = [];
     for (const server of runtimeServers) {
       try {
-        if (isInternalPlaywrightGatewayServer(server.id)) {
-          internalPlaywrightBridgeBoundTabId.value = await ensureInternalPlaywrightBridgeBinding();
-        }
         const tools = await mcpManager.connect(server);
         allTools.push(...tools);
         console.log(`[MCP] 已连接 ${server.name}，获取 ${tools.length} 个工具`);
@@ -1776,6 +1612,7 @@ const currentThemeIcon = computed(() => {
 onUnmounted(() => {
   chatAbortController.value?.abort();
   chatAbortController.value = null;
+  releaseLockedTab();
   if (pendingAutomationConfirm.value) {
     pendingAutomationConfirm.value.resolve(false);
     pendingAutomationConfirm.value = null;
@@ -1959,13 +1796,10 @@ async function executePlaywrightMcpTool(
     requestAutomationConfirmation,
     isInternalGatewayServer: isInternalPlaywrightGatewayServer,
     executeInternalTabsTool: executeInternalPlaywrightTabsTool,
-    ensureInternalBridgeForTool: ensureInternalPlaywrightBridgeForTool,
-    ensureInternalGatewayReady: ensurePlaywrightGatewayReadyForCurrentTab,
-    recoverMissingPage: async () => {
-      const newTabId = await openNewInternalPlaywrightTab();
-      const newTab = await browser.tabs.get(newTabId);
-      await bindInternalPlaywrightTab(newTabId, newTab.windowId);
-    },
+    ensureInternalBridgeForTool: async () => ({ ok: true }),
+    runtimeController: getPlaywrightRuntimeController(),
+    ensureInternalGatewayReady: async () => {},
+    recoverMissingPage: async () => {},
     reconnectServer: reconnectPlaywrightServerById,
     callTool: (targetServerId, targetToolName, args) => mcpManager.callTool(targetServerId, targetToolName, args),
     captureSnapshot: capturePlaywrightSnapshot,
@@ -2287,12 +2121,6 @@ async function sendMessage() {
     alert(i18n('noModelConfig'));
     openSettings();
     return;
-  }
-
-  try {
-    await ensurePlaywrightGatewayReadyForCurrentTab();
-  } catch (error) {
-    console.error('Failed to prepare internal Playwright bridge:', error);
   }
 
   if (!currentSession.value) {
@@ -2710,7 +2538,10 @@ function rejectAutomationAction() {
   <div class="container">
     <!-- Header -->
     <div class="header">
-      <h1><a href="https://tactus.cc.cd/" target="_blank" rel="noopener noreferrer" class="brand-link">Tactus</a></h1>
+      <div class="brand-stack">
+        <h1><a href="https://tactus.cc.cd/" target="_blank" rel="noopener noreferrer" class="brand-link">Tactus</a></h1>
+        <div class="brand-meta">{{ BUILD_META_LABEL }}</div>
+      </div>
       <div class="header-actions">
         <!-- Theme Selector -->
         <div class="theme-selector-wrapper">

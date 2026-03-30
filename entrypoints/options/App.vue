@@ -41,6 +41,7 @@ import {
   type Skill,
 } from '../../utils/db';
 import { fetchModels } from '../../utils/api';
+import { BUILD_META_LABEL } from '../../utils/buildInfo';
 import { importSkillFromFolder } from '../../utils/skillsImporter';
 import { t, type Translations } from '../../utils/i18n';
 import {
@@ -929,7 +930,10 @@ function showToast(message: string) {
 <template>
   <div class="options-page">
     <nav class="nav-sidebar">
-      <div class="nav-header"><h1><a href="https://tactus.cc.cd/" target="_blank" rel="noopener noreferrer" class="brand-link">Tactus</a></h1></div>
+      <div class="nav-header">
+        <h1><a href="https://tactus.cc.cd/" target="_blank" rel="noopener noreferrer" class="brand-link">Tactus</a></h1>
+        <div class="brand-meta">{{ BUILD_META_LABEL }}</div>
+      </div>
       <div class="nav-menu">
         <div class="nav-item" :class="{ active: activeNav === 'models' }" @click="activeNav = 'models'">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

@@ -121,7 +121,7 @@ describe('playwright bridge coverage matrix', () => {
         continue;
       }
 
-      expect(harness.ensureInternalBridgeForTool).toHaveBeenCalledWith(scenario.toolName);
+      expect(harness.ensureInternalBridgeForTool).toHaveBeenCalledWith(scenario.toolName, scenario.args);
       expect(harness.callTool).toHaveBeenCalledTimes(1);
 
       if (scenario.expectsSnapshotPreflight) {

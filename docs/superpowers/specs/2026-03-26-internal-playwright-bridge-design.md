@@ -82,6 +82,15 @@ background 内新增 bridge 管理器：
 - 先通知 background 准备默认 tab 绑定
 - 再初始化 HTTP MCP 连接
 
+### 3.1 runtime 生命周期收口
+
+后续实现不再让 sidepanel、executor 和 bridge 各自拼接恢复逻辑，而是由统一的 Playwright runtime controller 负责：
+
+- 维护 `idle / ready / recovering / blocked / degraded` 状态
+- 统一决定“重绑已有网页 tab / 跨窗口切换 / 明确导航时打开目标 URL”
+- 非导航类动作在没有真实网页目标时进入 `blocked`，而不是隐式创建 `about:blank`
+- 模型层只消费 runtime 产出的 observation，不再主导 target 生命周期恢复
+
 ### 4. 设置页与文档
 
 调整文案：

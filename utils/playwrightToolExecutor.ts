@@ -12,6 +12,7 @@ import {
   isPlaywrightStaleRefError,
   shouldPreflightPlaywrightSnapshot,
 } from './playwrightToolRecovery';
+import type { PlaywrightRuntimePrepareResult } from './playwrightRuntimeController';
 import type { Language } from './storage';
 import type { ToolCall, ToolExecutionContext, ToolResult } from './tools';
 
@@ -55,7 +56,21 @@ export interface PlaywrightToolExecutorInput {
   requestAutomationConfirmation?: (assessment: AutomationActionAssessment) => Promise<boolean>;
   isInternalGatewayServer: (serverId: string) => boolean;
   executeInternalTabsTool: (serverId: string, toolCall: ToolCall, logId: string) => Promise<ToolResult | null>;
-  ensureInternalBridgeForTool: (toolName: string) => Promise<PlaywrightInternalBridgePreparation | void>;
+  ensureInternalBridgeForTool: (
+    toolName: string,
+    toolArguments?: Record<string, any>,
+  ) => Promise<PlaywrightInternalBridgePreparation | void>;
+  runtimeController?: {
+    prepareForTool: (
+      toolName: string,
+      toolArguments?: Record<string, any>,
+    ) => Promise<PlaywrightRuntimePrepareResult>;
+    recoverForSessionError: (
+      toolName: string,
+      toolArguments: Record<string, any> | undefined,
+      errorMessage: string,
+    ) => Promise<PlaywrightRuntimePrepareResult>;
+  };
   ensureInternalGatewayReady: (forceReconnect: boolean) => Promise<void>;
   recoverMissingPage: () => Promise<void>;
   reconnectServer: (serverId: string) => Promise<boolean>;
@@ -78,6 +93,7 @@ export async function executePlaywrightTool(input: PlaywrightToolExecutorInput):
     isInternalGatewayServer,
     executeInternalTabsTool,
     ensureInternalBridgeForTool,
+    runtimeController,
     ensureInternalGatewayReady,
     recoverMissingPage,
     reconnectServer,
@@ -129,7 +145,9 @@ export async function executePlaywrightTool(input: PlaywrightToolExecutorInput):
       if (tabsResult) {
         return tabsResult;
       }
-      const preparation = await ensureInternalBridgeForTool(toolName);
+      const preparation = runtimeController
+        ? await runtimeController.prepareForTool(toolName, toolCall.arguments)
+        : await ensureInternalBridgeForTool(toolName, toolCall.arguments);
       if (preparation && preparation.ok === false) {
         const detail = preparation.detail || preparation.note || (language === 'zh-CN'
           ? '当前 Playwright bridge 不可用。'
@@ -197,10 +215,24 @@ export async function executePlaywrightTool(input: PlaywrightToolExecutorInput):
     try {
       let reconnected = false;
       if (isInternalGatewayServer(serverId)) {
-        if (isPlaywrightMissingPageError(mcpResult.content)) {
-          await recoverMissingPage();
+        if (runtimeController) {
+          const recovery = await runtimeController.recoverForSessionError(
+            toolName,
+            toolCall.arguments,
+            mcpResult.content,
+          );
+          if (!recovery.ok) {
+            throw new Error(recovery.detail || (language === 'zh-CN'
+              ? '当前 Playwright runtime 无法恢复执行。'
+              : 'The Playwright runtime could not recover execution.'));
+          }
+          internalBridgeNote = recovery.note ?? internalBridgeNote;
+        } else {
+          if (isPlaywrightMissingPageError(mcpResult.content)) {
+            await recoverMissingPage();
+          }
+          await ensureInternalGatewayReady(true);
         }
-        await ensureInternalGatewayReady(true);
         reconnected = true;
       } else {
         reconnected = await reconnectServer(serverId);

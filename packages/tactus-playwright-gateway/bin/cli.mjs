@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { WebSocketServer } from 'ws';
 import { InternalCDPRelayRuntime } from './relayRuntime.mjs';
 import { normalizePlaywrightProtocolError } from './protocolError.mjs';
+import { buildGatewayForwardedArgs } from './launchArgs.mjs';
 import { createNpmSpawnSpec } from './npmLauncher.mjs';
 
 const MCP_DEFAULT_PORT = process.env.PLAYWRIGHT_GATEWAY_PORT || '8931';
@@ -238,7 +239,7 @@ class InternalCDPRelayServer {
     ws.on('close', () => {
       if (this.playwrightConnection !== ws) return;
       this.playwrightConnection = null;
-      this.closeExtensionConnection('Playwright client disconnected');
+      this.runtime.resetBrowserSession();
     });
   }
 
@@ -316,27 +317,12 @@ if (passThroughOnly) {
 
   await relay.start();
 
-  const forwardedArgs = stripWrapperArgs(rawArgs);
-  const hasPortFlag = readOptionValue(forwardedArgs, '--port');
-  const hasHostFlag = readOptionValue(forwardedArgs, '--host');
-  const hasSharedContextFlag = forwardedArgs.includes('--shared-browser-context');
-  const hasCdpEndpointFlag = readOptionValue(forwardedArgs, '--cdp-endpoint');
-
-  if (!hasCdpEndpointFlag) {
-    forwardedArgs.unshift(relay.cdpEndpoint());
-    forwardedArgs.unshift('--cdp-endpoint');
-  }
-  if (!hasSharedContextFlag) {
-    forwardedArgs.unshift('--shared-browser-context');
-  }
-  if (!hasPortFlag) {
-    forwardedArgs.unshift(mcpPort);
-    forwardedArgs.unshift('--port');
-  }
-  if (!hasHostFlag) {
-    forwardedArgs.unshift(host);
-    forwardedArgs.unshift('--host');
-  }
+  const forwardedArgs = buildGatewayForwardedArgs({
+    rawArgs: stripWrapperArgs(rawArgs),
+    cdpEndpoint: relay.cdpEndpoint(),
+    mcpPort,
+    host,
+  });
 
   const npmSpawnSpec = createNpmSpawnSpec({
     args: ['exec', '--yes', '--package=@playwright/mcp@latest', 'playwright-mcp', '--', ...forwardedArgs],

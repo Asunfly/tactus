@@ -144,7 +144,7 @@ interface ToolLoopState {
 - 列 tab / 读 console / 读 network
 - reconnect MCP
 - restart local gateway
-- rebind target / create empty tab as recovery helper
+- rebind target / switch to another recoverable web tab / open explicit navigation target URL as recovery helper
 
 ## Logging
 
