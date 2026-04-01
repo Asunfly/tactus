@@ -4,6 +4,7 @@ export interface ToolLoopState {
   maxSelfHealRounds: number;
   usedSelfHealRounds: number;
   toolUseDisabled: boolean;
+  recentErrorSignatures: string[];
 }
 
 export interface ToolLoopTransition {
@@ -18,6 +19,7 @@ export function createInitialToolLoopState(maxSelfHealRounds = 3): ToolLoopState
     maxSelfHealRounds,
     usedSelfHealRounds: 0,
     toolUseDisabled: false,
+    recentErrorSignatures: [],
   };
 }
 
@@ -37,7 +39,10 @@ export function applyToolResultToLoopState(
   if (result.success) {
     return {
       action: 'continue_with_tools',
-      nextState: state,
+      nextState: {
+        ...state,
+        recentErrorSignatures: [],
+      },
       consumedSelfHealRound: false,
       budgetExhausted: false,
     };
@@ -53,9 +58,29 @@ export function applyToolResultToLoopState(
       nextState: {
         ...state,
         toolUseDisabled: true,
+        recentErrorSignatures: [],
       },
       consumedSelfHealRound: false,
       budgetExhausted: false,
+    };
+  }
+
+  // Detect repeated identical errors — if the same signature appears 2+ times
+  // consecutively, promote to fatal to prevent infinite loops
+  const signature = `${result.name}:${result.meta?.failureKind ?? 'unknown'}`;
+  const updatedSignatures = [...state.recentErrorSignatures, signature].slice(-3);
+  const consecutiveCount = countTrailingMatches(updatedSignatures, signature);
+
+  if (consecutiveCount >= 2) {
+    return {
+      action: 'continue_without_tools',
+      nextState: {
+        ...state,
+        toolUseDisabled: true,
+        recentErrorSignatures: updatedSignatures,
+      },
+      consumedSelfHealRound: false,
+      budgetExhausted: true,
     };
   }
 
@@ -68,6 +93,7 @@ export function applyToolResultToLoopState(
       ...state,
       usedSelfHealRounds: nextUsedRounds,
       toolUseDisabled: budgetExhausted,
+      recentErrorSignatures: updatedSignatures,
     },
     consumedSelfHealRound: consumesSelfHealRound,
     budgetExhausted,
@@ -138,4 +164,16 @@ export function promoteToolResultToBudgetExhausted(
       consumesSelfHealRound: false,
     },
   };
+}
+
+function countTrailingMatches(signatures: string[], target: string): number {
+  let count = 0;
+  for (let i = signatures.length - 1; i >= 0; i--) {
+    if (signatures[i] === target) {
+      count++;
+    } else {
+      break;
+    }
+  }
+  return count;
 }

@@ -50,6 +50,12 @@ interface TabBindingState {
   idleTimer: ReturnType<typeof setTimeout> | null;
 }
 
+interface DebuggerAttachResult {
+  tabState: TabBindingState;
+  switched: boolean;
+  requestedTabId: number;
+}
+
 interface ConnectionState {
   extensionEndpoint: string;
   socket: BridgeSocketLike;
@@ -63,8 +69,11 @@ export class InternalPlaywrightBridgeBackground {
   private readonly debuggerApi: BridgeDebuggerApi;
   private readonly tabsApi: BridgeTabsApi;
   private readonly idleTimeoutMs: number;
+  private readonly maxReconnectAttempts: number;
   private currentConnection: ConnectionState | null = null;
   private disposed = false;
+  private reconnectAttempts = 0;
+  private lastBindMessage: InternalPlaywrightBridgeBindMessage | null = null;
 
   private readonly handleDebuggerEvent = (
     source: { tabId?: number; sessionId?: string },
@@ -114,11 +123,13 @@ export class InternalPlaywrightBridgeBackground {
     debuggerApi: BridgeDebuggerApi;
     tabsApi: BridgeTabsApi;
     idleTimeoutMs?: number;
+    maxReconnectAttempts?: number;
   }) {
     this.createSocket = input.createSocket;
     this.debuggerApi = input.debuggerApi;
     this.tabsApi = input.tabsApi;
-    this.idleTimeoutMs = input.idleTimeoutMs ?? 30_000;
+    this.idleTimeoutMs = input.idleTimeoutMs ?? 120_000;
+    this.maxReconnectAttempts = input.maxReconnectAttempts ?? 3;
     this.debuggerApi.onEvent.addListener(this.handleDebuggerEvent);
     this.debuggerApi.onDetach.addListener(this.handleDebuggerDetach);
   }
@@ -127,6 +138,9 @@ export class InternalPlaywrightBridgeBackground {
     if (this.disposed) {
       throw new Error('Internal Playwright bridge has been disposed');
     }
+
+    this.lastBindMessage = message;
+    this.reconnectAttempts = 0;
 
     if (
       this.currentConnection
@@ -140,7 +154,10 @@ export class InternalPlaywrightBridgeBackground {
     }
 
     await this.teardownCurrentConnection('Rebinding internal Playwright bridge');
+    await this.createConnection(message);
+  }
 
+  private async createConnection(message: InternalPlaywrightBridgeBindMessage): Promise<void> {
     const socket = this.createSocket(message.extensionEndpoint);
     const openPromise = new Promise<void>((resolve, reject) => {
       socket.onopen = () => resolve();
@@ -162,11 +179,37 @@ export class InternalPlaywrightBridgeBackground {
     };
     socket.onclose = () => {
       if (this.currentConnection !== connection) return;
-      void this.teardownCurrentConnection('Internal Playwright bridge socket closed');
+      this.currentConnection = null;
+      void this.attemptReconnect();
     };
 
     this.currentConnection = connection;
     await openPromise;
+  }
+
+  private async attemptReconnect(): Promise<void> {
+    if (this.disposed || !this.lastBindMessage) return;
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      console.warn('[tactus-bridge] Max reconnect attempts reached, giving up');
+      return;
+    }
+
+    this.reconnectAttempts++;
+    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 4000);
+    console.debug(`[tactus-bridge] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+
+    await new Promise(resolve => setTimeout(resolve, delay));
+
+    if (this.disposed || this.currentConnection) return;
+
+    try {
+      await this.createConnection(this.lastBindMessage);
+      console.debug('[tactus-bridge] Reconnected successfully');
+      this.reconnectAttempts = 0;
+    } catch {
+      console.warn('[tactus-bridge] Reconnect failed');
+      void this.attemptReconnect();
+    }
   }
 
   async dispose(): Promise<void> {
@@ -191,10 +234,11 @@ export class InternalPlaywrightBridgeBackground {
     try {
       if (message.method === 'attachToTab') {
         const tabId = this.resolveTabId(connection, message.params?.tabId);
-        const tabState = await this.ensureDebuggerAttached(connection, tabId);
+        const { tabState, switched } = await this.ensureDebuggerAttached(connection, tabId);
         const targetInfo = await this.getCurrentTargetInfo(tabState.tabId);
         response.result = {
           tabId: tabState.tabId,
+          switched,
           targetInfo: targetInfo?.targetInfo ?? targetInfo,
         };
       } else if (message.method === 'bindToTab') {
@@ -203,19 +247,21 @@ export class InternalPlaywrightBridgeBackground {
           throw new Error('bindToTab requires a valid tabId');
         }
         connection.defaultTabId = nextTabId;
-        const tabState = await this.ensureDebuggerAttached(connection, nextTabId);
+        const { tabState, switched } = await this.ensureDebuggerAttached(connection, nextTabId);
         const targetInfo = await this.getCurrentTargetInfo(tabState.tabId);
         if (Boolean(message.params?.emitLifecycleEvent) && connection.socket.readyState === 1) {
           connection.socket.send(JSON.stringify({
             method: 'tabReattached',
             params: {
               tabId: tabState.tabId,
+              switched,
               targetInfo: targetInfo?.targetInfo ?? targetInfo,
             },
           }));
         }
         response.result = {
           tabId: tabState.tabId,
+          switched,
           targetInfo: targetInfo?.targetInfo ?? targetInfo,
         };
       } else if (message.method === 'createTab') {
@@ -227,7 +273,7 @@ export class InternalPlaywrightBridgeBackground {
           throw new Error('Failed to create browser tab');
         }
         connection.defaultTabId = createdTab.id;
-        const tabState = await this.ensureDebuggerAttached(connection, createdTab.id);
+        const { tabState } = await this.ensureDebuggerAttached(connection, createdTab.id);
         const targetInfo = await this.getCurrentTargetInfo(tabState.tabId);
         response.result = {
           tabId: createdTab.id,
@@ -243,7 +289,7 @@ export class InternalPlaywrightBridgeBackground {
       } else if (message.method === 'forwardCDPCommand') {
         const { tabId, sessionId, method, params } = message.params || {};
         const resolvedTabId = this.resolveTabId(connection, tabId);
-        const tabState = await this.ensureDebuggerAttached(connection, resolvedTabId);
+        const { tabState } = await this.ensureDebuggerAttached(connection, resolvedTabId);
 
         if (method === 'Page.handleJavaScriptDialog' && !tabState.dialogOpen) {
           response.result = {};
@@ -344,22 +390,23 @@ export class InternalPlaywrightBridgeBackground {
     return connection.defaultTabId;
   }
 
-  private async ensureDebuggerAttached(connection: ConnectionState, tabId: number): Promise<TabBindingState> {
+  private async ensureDebuggerAttached(connection: ConnectionState, tabId: number): Promise<DebuggerAttachResult> {
     const attachableTabId = await this.resolveAttachableTabId(tabId);
-    if (attachableTabId !== tabId) {
+    const switched = attachableTabId !== tabId;
+    if (switched) {
       connection.defaultTabId = attachableTabId;
     }
 
     const tabState = this.getOrCreateTabState(connection, attachableTabId);
     if (tabState.attached) {
       this.touchTabActivity(connection, tabState);
-      return tabState;
+      return { tabState, switched, requestedTabId: tabId };
     }
 
     await this.debuggerApi.attach({ tabId: attachableTabId }, '1.3');
     tabState.attached = true;
     this.touchTabActivity(connection, tabState);
-    return tabState;
+    return { tabState, switched, requestedTabId: tabId };
   }
 
   private async resolveAttachableTabId(preferredTabId: number): Promise<number> {

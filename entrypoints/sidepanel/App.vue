@@ -445,7 +445,6 @@ async function listInternalPlaywrightTabs() {
 async function executeInternalPlaywrightTabsTool(
   serverId: string,
   toolCall: ToolCall,
-  logId: string,
 ): Promise<ToolResult | null> {
   const action = getInternalPlaywrightTabsAction('browser_tabs', toolCall.arguments);
   if (!action) {
@@ -457,10 +456,6 @@ async function executeInternalPlaywrightTabsTool(
   const currentTabs = await listInternalPlaywrightTabs();
 
   if (action === 'list') {
-    updateAutomationLogEntry(logId, {
-      status: 'success',
-      detail: currentLanguage.value === 'zh-CN' ? '已读取浏览器标签页列表。' : 'Listed browser tabs.',
-    });
     return {
       tool_call_id: toolCall.id,
       name: toolCall.name,
@@ -472,10 +467,6 @@ async function executeInternalPlaywrightTabsTool(
   if (action === 'new') {
     await getPlaywrightRuntimeController().createBlankTab();
     const tabsAfterCreate = await listInternalPlaywrightTabs();
-    updateAutomationLogEntry(logId, {
-      status: 'success',
-      detail: currentLanguage.value === 'zh-CN' ? '已创建新的标签页。' : 'Created a new tab.',
-    });
     return {
       tool_call_id: toolCall.id,
       name: toolCall.name,
@@ -490,10 +481,6 @@ async function executeInternalPlaywrightTabsTool(
     : currentTabs[index] ?? null;
 
   if (!target) {
-    updateAutomationLogEntry(logId, {
-      status: 'error',
-      detail: currentLanguage.value === 'zh-CN' ? '目标标签页不存在。' : 'Target tab not found.',
-    });
     return {
       tool_call_id: toolCall.id,
       name: toolCall.name,
@@ -507,10 +494,6 @@ async function executeInternalPlaywrightTabsTool(
       reason: 'tabs_select',
     });
     const tabsAfterSelect = await listInternalPlaywrightTabs();
-    updateAutomationLogEntry(logId, {
-      status: 'success',
-      detail: currentLanguage.value === 'zh-CN' ? '已切换到目标标签页。' : 'Selected target tab.',
-    });
     return {
       tool_call_id: toolCall.id,
       name: toolCall.name,
@@ -522,10 +505,6 @@ async function executeInternalPlaywrightTabsTool(
   await getPlaywrightRuntimeController().closeTab(target.id);
   const tabsAfterClose = await listInternalPlaywrightTabs();
 
-  updateAutomationLogEntry(logId, {
-    status: 'success',
-    detail: currentLanguage.value === 'zh-CN' ? '已关闭目标标签页。' : 'Closed target tab.',
-  });
   return {
     tool_call_id: toolCall.id,
     name: toolCall.name,
@@ -1781,25 +1760,16 @@ async function executePlaywrightMcpTool(
   serverName: string,
   toolName: string,
   toolCall: ToolCall,
-  executionContext?: ToolExecutionContext,
 ): Promise<ToolResult> {
   return executePlaywrightTool({
     language: currentLanguage.value,
-    executionContext,
     serverId,
     serverName,
     toolName,
     toolCall,
-    createLogEntry: createAutomationLogEntry,
-    updateLogEntry: updateAutomationLogEntry,
-    buildAutomationDetail,
-    requestAutomationConfirmation,
     isInternalGatewayServer: isInternalPlaywrightGatewayServer,
     executeInternalTabsTool: executeInternalPlaywrightTabsTool,
-    ensureInternalBridgeForTool: async () => ({ ok: true }),
     runtimeController: getPlaywrightRuntimeController(),
-    ensureInternalGatewayReady: async () => {},
-    recoverMissingPage: async () => {},
     reconnectServer: reconnectPlaywrightServerById,
     callTool: (targetServerId, targetToolName, args) => mcpManager.callTool(targetServerId, targetToolName, args),
     captureSnapshot: capturePlaywrightSnapshot,
@@ -1951,7 +1921,6 @@ ${skill.references.length > 0
               serverName,
               parsed.toolName,
               toolCall,
-              _executionContext,
             );
           }
 
@@ -2003,23 +1972,6 @@ const toolExecutor: ToolExecutor = async (
     maxSelfHealRounds: 3,
     inSelfHealMode: false,
   };
-
-  if (isMcpTool(toolCall.name)) {
-    const parsed = parseMcpToolName(toolCall.name);
-    if (parsed && isPlaywrightBrowserTool(parsed.toolName)) {
-      const targetServer = mcpTools.value.find(tool =>
-        tool.serverId === parsed.serverId && tool.name === parsed.toolName,
-      );
-      const serverName = targetServer?.serverName || parsed.serverId;
-      return executePlaywrightMcpTool(
-        parsed.serverId,
-        serverName,
-        parsed.toolName,
-        toolCall,
-        context,
-      );
-    }
-  }
 
   return executeToolWithSupervisor({
     language: currentLanguage.value,

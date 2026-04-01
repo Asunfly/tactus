@@ -66,19 +66,23 @@ describe('toolLoopState', () => {
   it('recoverable error 超过预算后会禁用工具，交给模型做最终解释', () => {
     const state = createInitialToolLoopState(2);
     const first = applyToolResultToLoopState(state, createToolResult({
+      name: 'tool_a',
       success: false,
       result: 'first recoverable failure',
       meta: {
         outcome: 'recoverable_error',
         recoveryLayer: 'model',
+        failureKind: 'tool_runtime',
       },
     }));
     const second = applyToolResultToLoopState(first.nextState, createToolResult({
+      name: 'tool_b',
       success: false,
       result: 'second recoverable failure',
       meta: {
         outcome: 'recoverable_error',
         recoveryLayer: 'model',
+        failureKind: 'transport',
       },
     }));
 
@@ -86,6 +90,53 @@ describe('toolLoopState', () => {
     expect(second.nextState.usedSelfHealRounds).toBe(2);
     expect(second.nextState.toolUseDisabled).toBe(true);
     expect(second.budgetExhausted).toBe(true);
+  });
+
+  it('连续相同错误签名出现 2 次会被提前判定为死循环并禁用工具', () => {
+    const state = createInitialToolLoopState(5);
+    const first = applyToolResultToLoopState(state, createToolResult({
+      name: 'browser_click',
+      success: false,
+      result: 'TimeoutError: click timeout',
+      meta: {
+        outcome: 'recoverable_error',
+        recoveryLayer: 'model',
+        failureKind: 'tool_runtime',
+      },
+    }));
+    expect(first.action).toBe('continue_with_tools');
+
+    const second = applyToolResultToLoopState(first.nextState, createToolResult({
+      name: 'browser_click',
+      success: false,
+      result: 'TimeoutError: click timeout again',
+      meta: {
+        outcome: 'recoverable_error',
+        recoveryLayer: 'model',
+        failureKind: 'tool_runtime',
+      },
+    }));
+    expect(second.action).toBe('continue_without_tools');
+    expect(second.budgetExhausted).toBe(true);
+  });
+
+  it('成功调用会清除错误签名历史，不会误判后续错误为重复', () => {
+    const state = createInitialToolLoopState(5);
+    const fail1 = applyToolResultToLoopState(state, createToolResult({
+      name: 'browser_click',
+      success: false,
+      meta: { outcome: 'recoverable_error', recoveryLayer: 'model', failureKind: 'tool_runtime' },
+    }));
+    const success = applyToolResultToLoopState(fail1.nextState, createToolResult({
+      name: 'browser_click',
+      success: true,
+    }));
+    const fail2 = applyToolResultToLoopState(success.nextState, createToolResult({
+      name: 'browser_click',
+      success: false,
+      meta: { outcome: 'recoverable_error', recoveryLayer: 'model', failureKind: 'tool_runtime' },
+    }));
+    expect(fail2.action).toBe('continue_with_tools');
   });
 
   it('参数解析失败会生成模型可见的 recoverable observation', () => {

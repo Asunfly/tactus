@@ -65,14 +65,13 @@ type EnvironmentResolution = {
 
 export class PlaywrightRuntimeController {
   private readonly input: PlaywrightRuntimeControllerInput;
-  private state: PlaywrightRuntimeSnapshot;
+  private coreState: Omit<PlaywrightRuntimeSnapshot, 'boundTabId' | 'lockedTabId'>;
+  private taskActive = false;
 
   constructor(input: PlaywrightRuntimeControllerInput) {
     this.input = input;
-    this.state = {
+    this.coreState = {
       phase: 'idle',
-      boundTabId: input.getBoundTabId(),
-      lockedTabId: input.getLockedTabId(),
       targetTabId: null,
       targetWindowId: null,
       lastToolName: null,
@@ -82,23 +81,33 @@ export class PlaywrightRuntimeController {
 
   snapshot(): PlaywrightRuntimeSnapshot {
     return {
-      ...this.state,
+      ...this.coreState,
       boundTabId: this.input.getBoundTabId(),
       lockedTabId: this.input.getLockedTabId(),
     };
   }
 
   async startTask(): Promise<PlaywrightRuntimeSnapshot> {
-    const activeCurrentWindowTab = (await this.normalizeTabs(await this.input.queryTabs({ currentWindow: true })))
+    if (this.taskActive) {
+      return this.snapshot();
+    }
+    // Clean up any residual state from a previous task that wasn't properly finished
+    this.input.setLockedTabId(null);
+    this.taskActive = true;
+    const activeCurrentWindowTab = (await this.normalizeTabs(await this.safeQueryTabs({ currentWindow: true })))
       .find(candidate => Boolean(candidate.active)) ?? null;
     this.input.setLockedTabId(activeCurrentWindowTab?.id ?? null);
     this.setState({
+      phase: activeCurrentWindowTab ? 'ready' : 'idle',
       reason: activeCurrentWindowTab ? 'task_started' : 'task_started_without_active_tab',
+      targetTabId: activeCurrentWindowTab?.id ?? null,
+      targetWindowId: activeCurrentWindowTab?.windowId ?? null,
     });
     return this.snapshot();
   }
 
   finishTask(reason = 'task_finished'): PlaywrightRuntimeSnapshot {
+    this.taskActive = false;
     this.input.setLockedTabId(null);
     this.setState({
       phase: this.input.getBoundTabId() ? 'ready' : 'idle',
@@ -145,7 +154,7 @@ export class PlaywrightRuntimeController {
     current: boolean;
     active: boolean;
   }>> {
-    const tabs = await this.normalizeTabs(await this.input.queryTabs({}));
+    const tabs = await this.normalizeTabs(await this.safeQueryTabs({}));
     const currentTabId = this.input.getBoundTabId();
     return tabs
       .filter(tab => tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('devtools://'))
@@ -182,11 +191,11 @@ export class PlaywrightRuntimeController {
       note?: string;
     } = {},
   ): Promise<PlaywrightRuntimePrepareResult> {
-    const tab = this.normalizeTab(await this.input.getTab(tabId));
+    const tab = this.normalizeTab(await this.safeGetTab(tabId));
     if (!tab) {
       throw new Error('目标标签页不存在');
     }
-    const activeCurrentWindowTab = (await this.normalizeTabs(await this.input.queryTabs({ currentWindow: true })))
+    const activeCurrentWindowTab = (await this.normalizeTabs(await this.safeQueryTabs({ currentWindow: true })))
       .find(candidate => Boolean(candidate.active)) ?? null;
 
     return this.activateTarget(
@@ -211,7 +220,7 @@ export class PlaywrightRuntimeController {
       phase: 'idle',
       targetTabId: null,
       targetWindowId: null,
-      lastToolName: this.state.lastToolName,
+      lastToolName: this.coreState.lastToolName,
       reason: 'binding_cleared',
     });
   }
@@ -403,8 +412,8 @@ export class PlaywrightRuntimeController {
   }
 
   private async resolveEnvironment(): Promise<EnvironmentResolution> {
-    const currentWindowTabs = await this.normalizeTabs(await this.input.queryTabs({ currentWindow: true }));
-    const allTabs = await this.normalizeTabs(await this.input.queryTabs({}));
+    const currentWindowTabs = await this.normalizeTabs(await this.safeQueryTabs({ currentWindow: true }));
+    const allTabs = await this.normalizeTabs(await this.safeQueryTabs({}));
     const activeCurrentWindowTab = currentWindowTabs.find(tab => Boolean(tab.active)) ?? null;
 
     const preferredReadyCandidates: Array<ResolvedTarget | null> = [
@@ -482,7 +491,8 @@ export class PlaywrightRuntimeController {
   ): Promise<ResolvedTarget | null> {
     if (!tabId) return null;
     try {
-      const tab = await this.input.getTab(tabId);
+      const tab = await this.safeGetTab(tabId);
+      if (!tab) return null;
       const normalized = this.normalizeTab(tab);
       if (!normalized || !this.isMeaningfulTarget(normalized.url)) {
         return null;
@@ -510,13 +520,26 @@ export class PlaywrightRuntimeController {
     return tab as Required<Pick<PlaywrightRuntimeTabLike, 'id'>> & PlaywrightRuntimeTabLike;
   }
 
-  private setState(patch: Partial<PlaywrightRuntimeSnapshot>): void {
-    this.state = {
-      ...this.state,
-      ...patch,
-      boundTabId: this.input.getBoundTabId(),
-      lockedTabId: this.input.getLockedTabId(),
-    };
+  private setState(patch: Partial<Omit<PlaywrightRuntimeSnapshot, 'boundTabId' | 'lockedTabId'>>): void {
+    this.coreState = { ...this.coreState, ...patch };
+  }
+
+  private async safeQueryTabs(queryInfo: Record<string, any>): Promise<PlaywrightRuntimeTabLike[]> {
+    return Promise.race([
+      this.input.queryTabs(queryInfo),
+      new Promise<PlaywrightRuntimeTabLike[]>((resolve) => setTimeout(() => resolve([]), 5000)),
+    ]);
+  }
+
+  private async safeGetTab(tabId: number): Promise<PlaywrightRuntimeTabLike | null> {
+    try {
+      return await Promise.race([
+        this.input.getTab(tabId),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+      ]);
+    } catch {
+      return null;
+    }
   }
 
   private getToolIntent(toolName: string): 'navigate' | 'targeted' {

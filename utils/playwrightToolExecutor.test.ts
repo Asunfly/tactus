@@ -20,18 +20,16 @@ function createMcpResult(input: Partial<McpToolCallResult> = {}): McpToolCallRes
 }
 
 function createExecutorHarness(overrides: Partial<Parameters<typeof executePlaywrightTool>[0]> = {}) {
-  const logEntries: any[] = [];
-  const logUpdates: Array<{ id: string; patch: any }> = [];
   const callTool = vi.fn(async () => createMcpResult());
   const captureSnapshot = vi.fn(async () => createMcpResult({
     content: '- button "Save" [ref=e1]',
   }));
   const executeInternalTabsTool = vi.fn(async () => null as ToolResult | null);
-  const ensureInternalBridgeForTool = vi.fn(async () => {});
-  const ensureInternalGatewayReady = vi.fn(async () => {});
   const reconnectServer = vi.fn(async () => true);
-  const recoverMissingPage = vi.fn(async () => {});
-  const requestAutomationConfirmation = vi.fn(async () => true);
+  const runtimeController = {
+    prepareForTool: vi.fn(async () => ({ ok: true, snapshot: {} as any })),
+    recoverForSessionError: vi.fn(async () => ({ ok: true, snapshot: {} as any })),
+  };
 
   const defaults: Parameters<typeof executePlaywrightTool>[0] = {
     language: 'zh-CN',
@@ -39,22 +37,9 @@ function createExecutorHarness(overrides: Partial<Parameters<typeof executePlayw
     serverName: 'Playwright',
     toolName: 'browser_click',
     toolCall: createToolCall('browser_click', { ref: 'e1', element: 'Save' }),
-    createLogEntry(entry) {
-      logEntries.push(entry);
-      return `log-${logEntries.length}`;
-    },
-    updateLogEntry(id, patch) {
-      logUpdates.push({ id, patch });
-    },
-    buildAutomationDetail(detail) {
-      return detail;
-    },
-    requestAutomationConfirmation,
     isInternalGatewayServer: () => false,
     executeInternalTabsTool,
-    ensureInternalBridgeForTool,
-    ensureInternalGatewayReady,
-    recoverMissingPage,
+    runtimeController,
     reconnectServer,
     callTool,
     captureSnapshot,
@@ -67,16 +52,11 @@ function createExecutorHarness(overrides: Partial<Parameters<typeof executePlayw
 
   return {
     input,
-    logEntries,
-    logUpdates,
     callTool: input.callTool,
     captureSnapshot: input.captureSnapshot,
     executeInternalTabsTool: input.executeInternalTabsTool,
-    ensureInternalBridgeForTool: input.ensureInternalBridgeForTool,
-    ensureInternalGatewayReady: input.ensureInternalGatewayReady,
     reconnectServer: input.reconnectServer,
-    recoverMissingPage: input.recoverMissingPage,
-    requestAutomationConfirmation: input.requestAutomationConfirmation,
+    runtimeController: input.runtimeController,
   };
 }
 
@@ -142,10 +122,15 @@ describe('playwrightToolExecutor', () => {
     expect(harness.callTool).toHaveBeenCalledTimes(2);
   });
 
-  it('内置 gateway 命中 newPage 错误时会先补 tab 再恢复', async () => {
+  it('内置 gateway 命中 newPage 错误时通过 runtimeController 恢复', async () => {
+    const runtimeController = {
+      prepareForTool: vi.fn(async () => ({ ok: true, snapshot: {} as any })),
+      recoverForSessionError: vi.fn(async () => ({ ok: true, snapshot: {} as any, note: '已恢复' })),
+    };
     const harness = createExecutorHarness({
       serverId: 'builtin-playwright-gateway',
       isInternalGatewayServer: () => true,
+      runtimeController,
       callTool: vi.fn()
         .mockResolvedValueOnce(createMcpResult({
           success: false,
@@ -166,8 +151,7 @@ describe('playwrightToolExecutor', () => {
     const result = await executePlaywrightTool(harness.input);
 
     expect(result.success).toBe(true);
-    expect(harness.recoverMissingPage).toHaveBeenCalledTimes(1);
-    expect(harness.ensureInternalGatewayReady).toHaveBeenCalledWith(true);
+    expect(runtimeController.recoverForSessionError).toHaveBeenCalledTimes(1);
   });
 
   it('browser_tabs 被内置 gateway 接管时直接返回 tabs 结果', async () => {
@@ -189,17 +173,21 @@ describe('playwrightToolExecutor', () => {
 
     expect(result).toEqual(tabsResult);
     expect(harness.callTool).not.toHaveBeenCalled();
-    expect(harness.ensureInternalBridgeForTool).not.toHaveBeenCalled();
   });
 
   it('内置 gateway 前置守卫阻断时直接返回错误，不再调用 MCP 工具', async () => {
+    const runtimeController = {
+      prepareForTool: vi.fn(async () => ({
+        ok: false,
+        detail: '当前页面是浏览器内部页，且当前窗口里没有可调试的网页标签页。请切到普通网页后再试。',
+        snapshot: {} as any,
+      })),
+      recoverForSessionError: vi.fn(async () => ({ ok: true, snapshot: {} as any })),
+    };
     const harness = createExecutorHarness({
       serverId: 'builtin-playwright-gateway',
       isInternalGatewayServer: () => true,
-      ensureInternalBridgeForTool: vi.fn(async () => ({
-        ok: false,
-        detail: '当前页面是浏览器内部页，且当前窗口里没有可调试的网页标签页。请切到普通网页后再试。',
-      })),
+      runtimeController,
     });
 
     const result = await executePlaywrightTool(harness.input);
@@ -210,13 +198,18 @@ describe('playwrightToolExecutor', () => {
   });
 
   it('内置 gateway 自动切换目标 tab 时会把提示附加到成功结果前面', async () => {
+    const runtimeController = {
+      prepareForTool: vi.fn(async () => ({
+        ok: true,
+        note: '当前页面不可调试，已自动切换到"Example"继续执行。',
+        snapshot: {} as any,
+      })),
+      recoverForSessionError: vi.fn(async () => ({ ok: true, snapshot: {} as any })),
+    };
     const harness = createExecutorHarness({
       serverId: 'builtin-playwright-gateway',
       isInternalGatewayServer: () => true,
-      ensureInternalBridgeForTool: vi.fn(async () => ({
-        ok: true,
-        note: '当前页面不可调试，已自动切换到“Example”继续执行。',
-      })),
+      runtimeController,
       callTool: vi.fn(async () => createMcpResult({
         content: 'done',
       })),
@@ -227,7 +220,7 @@ describe('playwrightToolExecutor', () => {
     const result = await executePlaywrightTool(harness.input);
 
     expect(result.success).toBe(true);
-    expect(result.result).toContain('当前页面不可调试，已自动切换到“Example”继续执行。');
+    expect(result.result).toContain('当前页面不可调试，已自动切换到"Example"继续执行。');
     expect(result.result).toContain('done');
   });
 

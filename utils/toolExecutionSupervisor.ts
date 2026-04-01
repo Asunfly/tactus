@@ -146,6 +146,7 @@ function normalizeToolResult(
       context,
       summary: assessment.summary,
       details: rawResult.result,
+      failureKind: rawResult.meta?.failureKind,
     }),
     meta: {
       outcome: 'recoverable_error',
@@ -165,25 +166,70 @@ function buildRecoverableObservation(input: {
   context: ToolExecutionContext;
   summary: string;
   details: string;
+  failureKind?: string;
 }): string {
   const nextRound = Math.min(input.context.selfHealRound + 1, input.context.maxSelfHealRounds);
+  const kind = input.failureKind ?? 'tool_runtime';
+  const recommendations = getRecommendedActions(kind, input.details);
   return [
     'Tool execution outcome',
     `- Tool: ${input.toolCall.name}`,
     '- Status: recoverable_error',
     '- Recovery layer: model',
-    '- Failure kind: tool_runtime',
+    `- Failure kind: ${kind}`,
     `- Self-heal round: ${nextRound}/${input.context.maxSelfHealRounds}`,
     `- Summary: ${input.summary}`,
     '- Recommended next actions:',
-    '  - inspect the latest observation',
-    '  - adjust arguments if needed',
-    '  - choose a different tool if this tool is no longer suitable',
-    '  - request user confirmation before retrying a side-effect action',
+    ...recommendations.map(action => `  - ${action}`),
     '',
     'Details:',
     input.details,
   ].join('\n');
+}
+
+function getRecommendedActions(failureKind: string, details: string): string[] {
+  if (failureKind === 'tool_args') {
+    return [
+      'fix the arguments based on the tool schema',
+      'simplify the tool call if possible',
+    ];
+  }
+
+  // Playwright-specific recovery guidance based on error content
+  if (/Ref\s+\S+\s+not found|stale ref/i.test(details)) {
+    return [
+      'take a fresh browser_snapshot to get updated element refs',
+      're-identify the target element using the new snapshot',
+      'do NOT reuse refs from previous snapshots',
+    ];
+  }
+  if (/Session closed|Target closed|Target page.*closed|browserContext\.newPage/i.test(details)) {
+    return [
+      'the runtime has attempted reconnection — retry the same action',
+      'if retry fails again, use browser_navigate to open the target URL',
+    ];
+  }
+  if (/TimeoutError|Timeout \d+ms exceeded|subtree intercepts pointer events/i.test(details)) {
+    return [
+      'the element may be obscured, off-screen, or the page is still loading',
+      'take a browser_snapshot to check current page state',
+      'try scrolling, waiting, or using an alternative selector',
+    ];
+  }
+  if (/Failed to fetch|ECONNREFUSED|ECONNRESET|transport/i.test(details)) {
+    return [
+      'network issue with MCP server — the connection may have been restored',
+      'retry the same action once',
+      'if it fails again, inform the user about the connectivity issue',
+    ];
+  }
+
+  return [
+    'inspect the latest observation',
+    'adjust arguments if needed',
+    'choose a different tool if this tool is no longer suitable',
+    'request user confirmation before retrying a side-effect action',
+  ];
 }
 
 function buildFatalObservation(input: {

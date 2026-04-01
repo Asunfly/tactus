@@ -260,6 +260,7 @@ describe('InternalPlaywrightBridgeBackground', () => {
       id: 1,
       result: {
         tabId: 22,
+        switched: false,
         targetInfo: {
           targetId: 'tab-22',
           type: 'page',
@@ -292,6 +293,7 @@ describe('InternalPlaywrightBridgeBackground', () => {
       id: 9,
       result: {
         tabId: 11,
+        switched: true,
         targetInfo: {
           targetId: 'tab-11',
           type: 'page',
@@ -476,6 +478,7 @@ describe('InternalPlaywrightBridgeBackground', () => {
       id: 4,
       result: {
         tabId: 11,
+        switched: false,
         targetInfo: {
           targetId: 'tab-11',
           type: 'page',
@@ -522,6 +525,7 @@ describe('InternalPlaywrightBridgeBackground', () => {
       method: 'tabReattached',
       params: {
         tabId: 11,
+        switched: true,
         targetInfo: {
           targetId: 'tab-11',
           type: 'page',
@@ -534,6 +538,7 @@ describe('InternalPlaywrightBridgeBackground', () => {
       id: 12,
       result: {
         tabId: 11,
+        switched: true,
         targetInfo: {
           targetId: 'tab-11',
           type: 'page',
