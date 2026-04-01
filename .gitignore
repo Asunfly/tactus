@@ -16,6 +16,8 @@ stats.html
 stats-*.json
 .wxt
 web-ext.config.ts
+.playwright-mcp
+.tmp-playwright-smoke-upload.txt
 
 # Editor directories and files
 .vscode/*
