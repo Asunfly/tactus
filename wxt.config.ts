@@ -21,7 +21,7 @@ export default defineConfig({
     return {
       name: 'Tactus',
       description: 'The first browser AI Agent extension with Agent Skills, multi-provider AI, and MCP support',
-      version: '1.3.1',
+      version: '1.3.2',
       ...(isFirefox ? {} : { minimum_chrome_version: '120' }),
       permissions: [
         'storage',

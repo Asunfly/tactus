@@ -319,7 +319,7 @@ Thanks for the support and feedback from the friends at [LINUX DO](https://linux
 <!-- LINK GROUP -->
 [chrome-store-link]: https://chromewebstore.google.com/detail/tactus/nmhndbemnmmigjooiafblchoegecmkhh
 [chrome-version-shield]: https://img.shields.io/chrome-web-store/v/nmhndbemnmmigjooiafblchoegecmkhh?style=flat-square&label=Chrome&labelColor=black&color=blue
-[chrome-users-shield]: https://img.shields.io/badge/Chrome%20Users-120-blue?style=flat-square&labelColor=black
+[chrome-users-shield]: https://img.shields.io/chrome-web-store/users/nmhndbemnmmigjooiafblchoegecmkhh?style=flat-square&label=Chrome%20Users&labelColor=black&color=blue
 [firefox-store-link]: https://addons.mozilla.org/firefox/addon/tactus
 [firefox-version-shield]: https://img.shields.io/amo/v/tactus?style=flat-square&label=Firefox&labelColor=black&color=orange
 [firefox-users-shield]: https://img.shields.io/amo/users/tactus?style=flat-square&label=Firefox%20Users&labelColor=black&color=orange
