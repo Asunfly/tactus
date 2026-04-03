@@ -307,6 +307,7 @@ export function getFilteredTools(context?: {
   sharePageContent?: boolean;
   skills?: SkillInfo[];
   mcpTools?: McpTool[];
+  automationEnabled?: boolean;
 }): FunctionTool[] {
   const tools: FunctionTool[] = [];
 
@@ -324,6 +325,10 @@ export function getFilteredTools(context?: {
       if (!context?.skills || context.skills.length === 0) {
         continue;
       }
+    }
+
+    if (toolName.startsWith('browser_') && !context?.automationEnabled) {
+      continue;
     }
     
     tools.push(tool);
@@ -417,6 +422,7 @@ export function generateContextPrompt(context?: {
   sharePageContent?: boolean;
   skills?: SkillInfo[];
   mcpTools?: McpTool[];
+  automationEnabled?: boolean;
   pageInfo?: {
     domain: string;
     title: string;
@@ -448,14 +454,21 @@ export function generateContextPrompt(context?: {
   const skillsPrompt = buildSkillsContextPrompt(context?.skills);
   const mcpPrompt = buildMcpToolsContextPrompt(context?.mcpTools);
 
-  return `## 当前上下文
-${hints.join('\n')}${skillsPrompt}${mcpPrompt}
+  const automationPrompt = context?.automationEnabled
+    ? `
 
 ## 浏览器自动化
 - 你可以使用 browser_* 内置工具直接操作浏览器页面和当前窗口中的标签页
 - 执行 browser_click、browser_input、browser_select_option 前，优先调用 browser_observe 获取最新页面状态
 - 进行跨标签页任务时，优先使用 browser_tabs 管理标签页，再继续调用页面交互工具
-- browser_observe 返回的元素索引只对最新一次观察结果有效，不要复用旧索引
+- browser_observe 返回的元素索引只对最新一次观察结果有效，不要复用旧索引`
+    : `
+
+## 浏览器自动化
+- 当前对话未开启浏览器自动化，browser_* 工具当前不可用`;
+
+  return `## 当前上下文
+${hints.join('\n')}${skillsPrompt}${mcpPrompt}${automationPrompt}
 
 ## 重要提示
 - 不要假设页面内容，必须通过工具获取真实内容

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  extractIndexedElementHint,
   formatNativeAutomationBrowserState,
   isNativeAutomationAllowedUrl,
   renderNativeAutomationTabsMarkdown,
@@ -100,5 +101,16 @@ describe('formatNativeAutomationBrowserState', () => {
     expect(text).toContain('Header');
     expect(text).toContain('Content');
     expect(text).toContain('Footer');
+  });
+});
+
+describe('extractIndexedElementHint', () => {
+  it('returns the matching indexed line from browser state content', () => {
+    const line = extractIndexedElementHint('[0]<button>Open />\n[1]<button>Delete order />', 1);
+    expect(line).toContain('Delete order');
+  });
+
+  it('returns null when the index does not exist', () => {
+    expect(extractIndexedElementHint('[0]<button>Open />', 2)).toBeNull();
   });
 });

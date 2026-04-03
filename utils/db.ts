@@ -117,6 +117,8 @@ export interface ChatSession {
   title: string;
   messages: ChatMessage[];
   apiMessages?: ApiMessageRecord[];
+  automationEnabled?: boolean;
+  automationMode?: 'default' | 'yolo';
   createdAt: number;
   updatedAt: number;
   providerId?: string;

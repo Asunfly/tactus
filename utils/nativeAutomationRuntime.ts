@@ -1,4 +1,5 @@
 import {
+  extractIndexedElementHint,
   formatNativeAutomationBrowserState,
   isNativeAutomationAllowedUrl,
   renderNativeAutomationTabsMarkdown,
@@ -44,6 +45,7 @@ export interface NativeAutomationToolResult {
 export class NativeAutomationRuntime {
   private readonly bridge: NativeAutomationBridge;
   private currentTabId: number | null = null;
+  private lastObservedContent: string | null = null;
 
   constructor(bridge: NativeAutomationBridge) {
     this.bridge = bridge;
@@ -59,6 +61,11 @@ export class NativeAutomationRuntime {
     }
   }
 
+  getIndexedElementHint(index: number): string | null {
+    if (!this.lastObservedContent) return null;
+    return extractIndexedElementHint(this.lastObservedContent, index);
+  }
+
   async observe(): Promise<NativeAutomationToolResult> {
     const target = await this.ensureCurrentTarget();
     if (!target) {
@@ -72,6 +79,7 @@ export class NativeAutomationRuntime {
       this.renderTabsMarkdown(target.windowId),
       this.bridge.getBrowserState(target.id),
     ]);
+    this.lastObservedContent = browserState.content;
 
     return {
       success: true,

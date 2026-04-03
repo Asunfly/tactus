@@ -4,7 +4,7 @@ import { generateContextPrompt, getFilteredTools } from './tools';
 
 describe('native automation tools', () => {
   it('includes built-in browser automation tools', () => {
-    const tools = getFilteredTools({ sharePageContent: false, skills: [], mcpTools: [] });
+    const tools = getFilteredTools({ sharePageContent: false, skills: [], mcpTools: [], automationEnabled: true });
     const names = tools.map(tool => tool.function.name);
 
     expect(names).toContain('browser_observe');
@@ -23,9 +23,18 @@ describe('native automation tools', () => {
       skills: [],
       mcpTools: [],
       language: 'zh-CN',
+      automationEnabled: true,
     });
 
     expect(prompt).toContain('browser_observe');
     expect(prompt).toContain('browser_tabs');
+  });
+
+  it('hides automation tools when automation is disabled', () => {
+    const tools = getFilteredTools({ sharePageContent: false, skills: [], mcpTools: [], automationEnabled: false });
+    const names = tools.map(tool => tool.function.name);
+
+    expect(names).not.toContain('browser_observe');
+    expect(names).not.toContain('browser_tabs');
   });
 });

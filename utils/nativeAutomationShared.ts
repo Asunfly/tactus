@@ -94,3 +94,9 @@ export function formatNativeAutomationBrowserState(input: {
     input.browserState.footer,
   ].join('\n');
 }
+
+export function extractIndexedElementHint(content: string, index: number): string | null {
+  const lines = content.split('\n');
+  const prefix = `[${index}]`;
+  return lines.find(line => line.trimStart().startsWith(prefix)) ?? null;
+}

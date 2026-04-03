@@ -455,7 +455,7 @@ function sanitizeMessagesForVision(messages: ApiMessage[], allowImages: boolean)
 export async function* streamChat(
   provider: AIProvider,
   messages: ChatMessage[],
-  context?: { sharePageContent?: boolean; skills?: SkillInfo[]; mcpTools?: McpTool[]; pageInfo?: { domain: string; title: string; url?: string }; language?: Language },
+  context?: { sharePageContent?: boolean; skills?: SkillInfo[]; mcpTools?: McpTool[]; pageInfo?: { domain: string; title: string; url?: string }; language?: Language; automationEnabled?: boolean },
   config?: FunctionCallingConfig,
   retryConfig: RetryConfig = DEFAULT_RETRY_CONFIG,
   previousApiMessages?: ApiMessage[]  // 新增：传入之前保存的完整 API 上下文

@@ -54,6 +54,13 @@ import { getToolStatusText, isMcpTool, parseMcpToolName, type ToolCall, type Too
 import { createNativeAutomationBridge } from '../../utils/nativeAutomationExtension';
 import { NativeAutomationRuntime } from '../../utils/nativeAutomationRuntime';
 import { resolveNativeAutomationTabAction } from '../../utils/nativeAutomationShared';
+import {
+  createAutomationSessionState,
+  isDangerousAutomationAction,
+  normalizeAutomationSessionState,
+  type AutomationMode,
+  type AutomationSessionState,
+} from '../../utils/nativeAutomationPolicy';
 import { shouldSubmitOnEnter } from '../../utils/enterSubmit';
 import { getAllSkills, getSkillByName, getSkillFileAsText, type Skill } from '../../utils/skills';
 import { executeScript, setScriptConfirmCallback, type ScriptConfirmationRequest } from '../../utils/skillsExecutor';
@@ -269,6 +276,7 @@ const fullscreenCodeBlock = ref<{ code: string; language: string } | null>(null)
 
 // Session state
 const currentSession = ref<ChatSession | null>(null);
+const automationSession = ref<AutomationSessionState>(createAutomationSessionState());
 const sessions = ref<ChatSession[]>([]);
 const sessionsHasMore = ref(true);
 const sessionsLoading = ref(false);
@@ -309,12 +317,134 @@ const isTabLocked = computed(() => {
 // 锁定时记住的 tabId，确保内容获取和脚本执行在正确的标签页上执行
 const lockedTabId = ref<number | null>(null);
 
+const showAutomationModeModal = ref(false);
+const pendingAutomationConfirm = ref<{
+  title: string;
+  description: string;
+  warning?: string;
+  confirmLabel: string;
+  variant: 'default' | 'yolo' | 'danger';
+  resolve: (confirmed: boolean) => void;
+} | null>(null);
+
 const nativeAutomationRuntimeRef = shallowRef<NativeAutomationRuntime | null>(null);
 function getNativeAutomationRuntime(): NativeAutomationRuntime {
   if (!nativeAutomationRuntimeRef.value) {
     nativeAutomationRuntimeRef.value = new NativeAutomationRuntime(createNativeAutomationBridge());
   }
   return nativeAutomationRuntimeRef.value;
+}
+
+function syncAutomationSessionToCurrentSession(): void {
+  if (!currentSession.value) return;
+  currentSession.value.automationEnabled = automationSession.value.enabled;
+  currentSession.value.automationMode = automationSession.value.mode;
+}
+
+function getAutomationModeLabel(mode: AutomationMode): string {
+  if (mode === 'yolo') {
+    return 'YOLO';
+  }
+  return currentLanguage.value === 'zh-CN' ? '默认' : 'Default';
+}
+
+const automationChipLabel = computed(() => {
+  if (!automationSession.value.enabled) {
+    return currentLanguage.value === 'zh-CN' ? '自动化：关闭' : 'Automation: Off';
+  }
+  return currentLanguage.value === 'zh-CN'
+    ? `自动化：${getAutomationModeLabel(automationSession.value.mode)}`
+    : `Automation: ${getAutomationModeLabel(automationSession.value.mode)}`;
+});
+
+const automationChipTitle = computed(() => {
+  if (!automationSession.value.enabled) {
+    return currentLanguage.value === 'zh-CN'
+      ? '当前对话未启用浏览器自动化'
+      : 'Browser automation is disabled for this conversation';
+  }
+  return automationSession.value.mode === 'yolo'
+    ? (currentLanguage.value === 'zh-CN'
+      ? 'YOLO 模式会自动批准危险操作'
+      : 'YOLO mode auto-approves dangerous actions')
+    : (currentLanguage.value === 'zh-CN'
+      ? '默认模式会在危险操作前弹出确认'
+      : 'Default mode asks for confirmation before dangerous actions');
+});
+
+function requestAutomationConfirmation(input: {
+  title: string;
+  description: string;
+  warning?: string;
+  confirmLabel: string;
+  variant: 'default' | 'yolo' | 'danger';
+}): Promise<boolean> {
+  return new Promise((resolve) => {
+    pendingAutomationConfirm.value = {
+      ...input,
+      resolve,
+    };
+  });
+}
+
+async function applyAutomationMode(next: { enabled: boolean; mode: AutomationMode }): Promise<void> {
+  automationSession.value = next;
+  syncAutomationSessionToCurrentSession();
+  await saveCurrentSession();
+}
+
+async function setAutomationMode(nextMode: 'off' | AutomationMode): Promise<void> {
+  if (nextMode === 'off') {
+    await applyAutomationMode(createAutomationSessionState());
+    showAutomationModeModal.value = false;
+    return;
+  }
+
+  showAutomationModeModal.value = false;
+
+  if (nextMode === 'default' && !automationSession.value.enabled) {
+    const confirmed = await requestAutomationConfirmation({
+      title: currentLanguage.value === 'zh-CN' ? '开启浏览器自动化' : 'Enable Browser Automation',
+      description: currentLanguage.value === 'zh-CN'
+        ? '当前对话开启后，模型可以调用 browser_* 工具执行跨标签页网页操作。默认模式会在危险操作前再次确认。'
+        : 'When enabled, the model can use browser_* tools to operate pages and tabs. Default mode asks again before dangerous actions.',
+      confirmLabel: currentLanguage.value === 'zh-CN' ? '开启默认模式' : 'Enable Default Mode',
+      variant: 'default',
+    });
+    if (!confirmed) return;
+  }
+
+  if (nextMode === 'yolo') {
+    const confirmed = await requestAutomationConfirmation({
+      title: currentLanguage.value === 'zh-CN' ? '开启 YOLO 模式' : 'Enable YOLO Mode',
+      description: currentLanguage.value === 'zh-CN'
+        ? 'YOLO 模式下，模型发起的危险浏览器自动化操作将被自动批准，不再逐次弹出确认。'
+        : 'In YOLO mode, dangerous browser automation actions are auto-approved without per-action confirmations.',
+      warning: currentLanguage.value === 'zh-CN'
+        ? '仅在你完全信任当前模型输出，并接受误点击、误提交、误关闭标签页等风险时开启。'
+        : 'Only enable this if you fully trust the model output and accept risks like accidental clicks, submits, or tab closures.',
+      confirmLabel: 'Enable YOLO',
+      variant: 'yolo',
+    });
+    if (!confirmed) return;
+  }
+
+  await applyAutomationMode({
+    enabled: true,
+    mode: nextMode,
+  });
+}
+
+function confirmAutomationModal() {
+  if (!pendingAutomationConfirm.value) return;
+  pendingAutomationConfirm.value.resolve(true);
+  pendingAutomationConfirm.value = null;
+}
+
+function cancelAutomationModal() {
+  if (!pendingAutomationConfirm.value) return;
+  pendingAutomationConfirm.value.resolve(false);
+  pendingAutomationConfirm.value = null;
 }
 
 // 捕获当前活跃标签页 ID 并锁定
@@ -680,7 +810,14 @@ async function regenerateResponse(): Promise<void> {
     for await (const event of streamChat(
       provider,
       messages.value.slice(0, -1),
-      { sharePageContent: sharePageContent.value, skills: skillsInfo, mcpTools: mcpTools.value, pageInfo, language: currentLanguage },
+      {
+        sharePageContent: sharePageContent.value,
+        skills: skillsInfo,
+        mcpTools: mcpTools.value,
+        pageInfo,
+        language: currentLanguage,
+        automationEnabled: automationSession.value.enabled,
+      },
       reactConfig,
       undefined, // retryConfig 使用默认值
       hasValidPreviousContext ? previousApiMessages : undefined
@@ -1483,6 +1620,52 @@ const toolExecutor: ToolExecutor = async (toolCall: ToolCall): Promise<ToolResul
   if (lockedTabId.value) {
     nativeAutomationRuntime.seedCurrentTabId(lockedTabId.value);
   }
+  const isBrowserTool = toolCall.name.startsWith('browser_');
+  if (isBrowserTool && !automationSession.value.enabled) {
+    return {
+      tool_call_id: toolCall.id,
+      name: toolCall.name,
+      result: currentLanguage.value === 'zh-CN'
+        ? '当前对话未开启浏览器自动化。请先在输入框上方启用自动化模式后再继续。'
+        : 'Browser automation is disabled for this conversation. Enable automation first.',
+      success: false,
+    };
+  }
+
+  const maybeConfirmDangerousAutomation = async (): Promise<ToolResult | null> => {
+    if (!isBrowserTool || automationSession.value.mode === 'yolo') return null;
+
+    let hint: string | null = null;
+    if (toolCall.name === 'browser_click' && typeof toolCall.arguments.index === 'number') {
+      hint = nativeAutomationRuntime.getIndexedElementHint(toolCall.arguments.index);
+    }
+
+    if (!isDangerousAutomationAction(toolCall.name, toolCall.arguments, hint)) {
+      return null;
+    }
+
+    const confirmed = await requestAutomationConfirmation({
+      title: currentLanguage.value === 'zh-CN' ? '确认危险自动化操作' : 'Confirm Dangerous Automation Action',
+      description: currentLanguage.value === 'zh-CN'
+        ? `模型准备执行危险操作：${toolCall.name}${hint ? `\n目标：${hint}` : ''}`
+        : `The model is about to execute a dangerous action: ${toolCall.name}${hint ? `\nTarget: ${hint}` : ''}`,
+      warning: currentLanguage.value === 'zh-CN'
+        ? '默认模式下，这类操作需要你逐次确认。切换到 YOLO 模式后将自动批准。'
+        : 'In default mode, dangerous actions require confirmation. YOLO mode auto-approves them.',
+      confirmLabel: currentLanguage.value === 'zh-CN' ? '批准本次操作' : 'Approve This Action',
+      variant: 'danger',
+    });
+
+    if (confirmed) return null;
+    return {
+      tool_call_id: toolCall.id,
+      name: toolCall.name,
+      result: currentLanguage.value === 'zh-CN'
+        ? '用户取消了本次危险浏览器自动化操作。不要自动重试，除非用户再次明确要求。'
+        : 'The user rejected this dangerous browser automation action. Do not retry automatically unless the user explicitly asks again.',
+      success: false,
+    };
+  };
 
   switch (toolCall.name) {
     case 'extract_page_content': {
@@ -1609,6 +1792,8 @@ ${skill.references.length > 0
       };
     }
     case 'browser_click': {
+      const rejection = await maybeConfirmDangerousAutomation();
+      if (rejection) return rejection;
       const runtimeResult = await nativeAutomationRuntime.click(Number(toolCall.arguments.index));
       return {
         tool_call_id: toolCall.id,
@@ -1618,6 +1803,8 @@ ${skill.references.length > 0
       };
     }
     case 'browser_input': {
+      const rejection = await maybeConfirmDangerousAutomation();
+      if (rejection) return rejection;
       const runtimeResult = await nativeAutomationRuntime.input(
         Number(toolCall.arguments.index),
         String(toolCall.arguments.text ?? ''),
@@ -1630,6 +1817,8 @@ ${skill.references.length > 0
       };
     }
     case 'browser_select_option': {
+      const rejection = await maybeConfirmDangerousAutomation();
+      if (rejection) return rejection;
       const runtimeResult = await nativeAutomationRuntime.selectOption(
         Number(toolCall.arguments.index),
         String(toolCall.arguments.text ?? ''),
@@ -1642,6 +1831,8 @@ ${skill.references.length > 0
       };
     }
     case 'browser_scroll': {
+      const rejection = await maybeConfirmDangerousAutomation();
+      if (rejection) return rejection;
       const runtimeResult = await nativeAutomationRuntime.scroll(toolCall.arguments || {});
       return {
         tool_call_id: toolCall.id,
@@ -1662,6 +1853,8 @@ ${skill.references.length > 0
       };
     }
     case 'browser_exec_js': {
+      const rejection = await maybeConfirmDangerousAutomation();
+      if (rejection) return rejection;
       const runtimeResult = await nativeAutomationRuntime.executeJs(String(toolCall.arguments.script ?? ''));
       return {
         tool_call_id: toolCall.id,
@@ -1671,6 +1864,8 @@ ${skill.references.length > 0
       };
     }
     case 'browser_tabs': {
+      const rejection = await maybeConfirmDangerousAutomation();
+      if (rejection) return rejection;
       const action = resolveNativeAutomationTabAction(toolCall.arguments);
       if (!action) {
         return {
@@ -1720,6 +1915,7 @@ ${skill.references.length > 0
 // Save current session
 async function saveCurrentSession() {
   if (!currentSession.value) return;
+  syncAutomationSessionToCurrentSession();
   const sessionToSave: ChatSession = {
     ...currentSession.value,
     messages: JSON.parse(JSON.stringify(messages.value)),
@@ -1808,6 +2004,7 @@ async function sendMessage() {
 
   if (!currentSession.value) {
     currentSession.value = await createSession(activeProviderId.value || undefined);
+    syncAutomationSessionToCurrentSession();
     await loadInitialSessions();
   }
 
@@ -1897,7 +2094,14 @@ async function sendMessage() {
     for await (const event of streamChat(
       provider,
       messages.value.slice(0, -1),
-      { sharePageContent: sharePageContent.value, skills: skillsInfo, mcpTools: mcpTools.value, pageInfo, language: currentLanguage },
+      {
+        sharePageContent: sharePageContent.value,
+        skills: skillsInfo,
+        mcpTools: mcpTools.value,
+        pageInfo,
+        language: currentLanguage,
+        automationEnabled: automationSession.value.enabled,
+      },
       reactConfig,
       undefined, // retryConfig 使用默认值
       hasValidPreviousContext ? previousApiMessages : undefined
@@ -2019,6 +2223,7 @@ watch(inputText, () => {
 // New chat
 async function newChat() {
   currentSession.value = null;
+  automationSession.value = createAutomationSessionState();
   messages.value = [];
   setLastApiMessages([]); // 清空 API 上下文
   pendingImages.value = [];
@@ -2035,6 +2240,10 @@ async function openHistory() {
 // Load session
 async function loadSession(session: ChatSession) {
   currentSession.value = session;
+  automationSession.value = normalizeAutomationSessionState({
+    enabled: session.automationEnabled,
+    mode: session.automationMode,
+  });
   messages.value = session.messages;
   // 恢复 API 上下文
   if (session.apiMessages) {
@@ -2494,6 +2703,27 @@ function rejectScript() {
             <span class="tab-title">{{ activeTabInfo?.title || i18n('currentTab') }}</span>
           </button>
         </div>
+
+        <div class="automation-mode-row">
+          <button
+            class="automation-mode-chip"
+            data-testid="automation-mode-chip"
+            :class="{
+              active: automationSession.enabled,
+              yolo: automationSession.enabled && automationSession.mode === 'yolo',
+            }"
+            type="button"
+            :title="automationChipTitle"
+            @click="showAutomationModeModal = true"
+          >
+            <span class="automation-mode-icon">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2l3.09 6.26L22 9l-5 4.87L18.18 22 12 18.73 5.82 22 7 13.87 2 9l6.91-.74L12 2z"/>
+              </svg>
+            </span>
+            <span class="automation-mode-text">{{ automationChipLabel }}</span>
+          </button>
+        </div>
       </div>
 
       <div v-if="pendingQuote" class="pending-quote">
@@ -2748,6 +2978,67 @@ function rejectScript() {
             <button class="btn btn-outline" @click="rejectScript">{{ i18n('cancel') }}</button>
             <button class="btn btn-secondary" @click="confirmScript(false)">{{ currentLanguage === 'zh-CN' ? '执行一次' : 'Run Once' }}</button>
             <button class="btn btn-primary" @click="confirmScript(true)">{{ currentLanguage === 'zh-CN' ? '信任并执行' : 'Trust & Run' }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showAutomationModeModal" class="modal-overlay" @click.self="showAutomationModeModal = false">
+      <div class="modal automation-mode-modal">
+        <div class="modal-header">
+          <h2>{{ currentLanguage === 'zh-CN' ? '浏览器自动化模式' : 'Browser Automation Mode' }}</h2>
+          <button class="close-btn" @click="showAutomationModeModal = false">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="automation-mode-description">
+            {{ currentLanguage === 'zh-CN'
+              ? '自动化按当前对话生效。关闭时模型无法调用 browser_* 工具。'
+              : 'Automation is scoped to the current conversation. When off, browser_* tools are unavailable.' }}
+          </p>
+          <div class="automation-mode-options">
+            <button class="automation-mode-option" data-testid="automation-mode-off" :class="{ active: !automationSession.enabled }" @click="setAutomationMode('off')">
+              <div class="automation-mode-option-title">{{ currentLanguage === 'zh-CN' ? '关闭' : 'Off' }}</div>
+              <div class="automation-mode-option-text">
+                {{ currentLanguage === 'zh-CN' ? '最安全。模型不会执行任何浏览器自动化动作。' : 'Safest. The model cannot execute browser automation actions.' }}
+              </div>
+            </button>
+            <button class="automation-mode-option" data-testid="automation-mode-default" :class="{ active: automationSession.enabled && automationSession.mode === 'default' }" @click="setAutomationMode('default')">
+              <div class="automation-mode-option-title">{{ currentLanguage === 'zh-CN' ? '默认模式' : 'Default Mode' }}</div>
+              <div class="automation-mode-option-text">
+                {{ currentLanguage === 'zh-CN' ? '允许自动化，但危险操作会逐次确认。' : 'Automation is allowed, but dangerous actions require confirmation.' }}
+              </div>
+            </button>
+            <button class="automation-mode-option danger" data-testid="automation-mode-yolo" :class="{ active: automationSession.enabled && automationSession.mode === 'yolo' }" @click="setAutomationMode('yolo')">
+              <div class="automation-mode-option-title">YOLO</div>
+              <div class="automation-mode-option-text">
+                {{ currentLanguage === 'zh-CN' ? '自动批准危险操作。仅在你完全接受误操作风险时使用。' : 'Auto-approves dangerous actions. Use only if you fully accept the risk.' }}
+              </div>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="pendingAutomationConfirm" class="modal-overlay">
+      <div class="modal automation-confirm-modal" :class="pendingAutomationConfirm.variant">
+        <div class="modal-header">
+          <h2>{{ pendingAutomationConfirm.title }}</h2>
+        </div>
+        <div class="modal-body">
+          <p class="automation-confirm-description">{{ pendingAutomationConfirm.description }}</p>
+          <div v-if="pendingAutomationConfirm.warning" class="automation-confirm-warning">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+              <line x1="12" y1="9" x2="12" y2="13"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            <span>{{ pendingAutomationConfirm.warning }}</span>
+          </div>
+          <div class="script-confirm-actions">
+            <button class="btn btn-outline" data-testid="automation-confirm-cancel" @click="cancelAutomationModal">{{ i18n('cancel') }}</button>
+            <button class="btn" data-testid="automation-confirm-accept" :class="pendingAutomationConfirm.variant === 'yolo' ? 'btn-primary' : 'btn-secondary'" @click="confirmAutomationModal">
+              {{ pendingAutomationConfirm.confirmLabel }}
+            </button>
           </div>
         </div>
       </div>
