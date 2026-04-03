@@ -15,6 +15,7 @@ node_modules
 stats.html
 stats-*.json
 .wxt
+.playwright-mcp/
 web-ext.config.ts
 
 # Editor directories and files
