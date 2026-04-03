@@ -188,12 +188,26 @@ async function handleNativeAutomationTabControl(
 async function handleNativeAutomationPageControl(
   message: { action: string; targetTabId: number; payload?: unknown },
 ) {
-  const result = await browser.tabs.sendMessage(message.targetTabId, {
-    type: NATIVE_AUTOMATION_PAGE_CONTROL_MESSAGE,
-    action: message.action,
-    payload: message.payload,
-  });
-  return result;
+  try {
+    const result = await browser.tabs.sendMessage(message.targetTabId, {
+      type: NATIVE_AUTOMATION_PAGE_CONTROL_MESSAGE,
+      action: message.action,
+      payload: message.payload,
+    });
+    return result;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (
+      message.action === 'click_element'
+      && errorMessage.includes('message channel closed before a response was received')
+    ) {
+      return {
+        success: true,
+        message: '点击已派发，页面可能正在跳转。',
+      };
+    }
+    throw error;
+  }
 }
 
 export default defineBackground(() => {
