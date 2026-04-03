@@ -1,3 +1,8 @@
+import {
+  NATIVE_AUTOMATION_PAGE_CONTROL_MESSAGE,
+  NATIVE_AUTOMATION_TAB_CONTROL_MESSAGE,
+} from '../utils/nativeAutomationShared';
+
 async function openSidePanel(tabId?: number): Promise<void> {
   const sidePanelApi = (browser as any).sidePanel;
   if (sidePanelApi?.open && tabId) {
@@ -134,6 +139,63 @@ async function executeScriptInTab(tabId: number, code: string, args: Record<stri
   throw new Error('脚本执行超时');
 }
 
+async function handleNativeAutomationTabControl(
+  message: { action: string; payload?: Record<string, any> },
+) {
+  switch (message.action) {
+    case 'get_active_tab': {
+      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      return { success: true, tab: tab ?? null };
+    }
+    case 'get_tab_info': {
+      const tabId = Number(message.payload?.tabId);
+      const tab = await browser.tabs.get(tabId);
+      return { success: true, tab };
+    }
+    case 'get_window_tabs': {
+      const windowId = typeof message.payload?.windowId === 'number'
+        ? message.payload.windowId
+        : undefined;
+      const tabs = await browser.tabs.query(windowId ? { windowId } : { currentWindow: true });
+      return { success: true, tabs };
+    }
+    case 'open_new_tab': {
+      const url = typeof message.payload?.url === 'string' ? message.payload.url : '';
+      if (!url) {
+        return { success: false, error: 'open_new_tab 需要有效的 url。' };
+      }
+      const tab = await browser.tabs.create({ url, active: true });
+      return { success: true, tab };
+    }
+    case 'activate_tab': {
+      const tabId = Number(message.payload?.tabId);
+      const tab = await browser.tabs.update(tabId, { active: true });
+      if (tab && typeof tab.windowId === 'number') {
+        await browser.windows.update(tab.windowId, { focused: true }).catch(() => {});
+      }
+      return { success: true, tab };
+    }
+    case 'close_tab': {
+      const tabId = Number(message.payload?.tabId);
+      await browser.tabs.remove(tabId);
+      return { success: true };
+    }
+    default:
+      return { success: false, error: `未知的自动化标签页动作: ${String(message.action)}` };
+  }
+}
+
+async function handleNativeAutomationPageControl(
+  message: { action: string; targetTabId: number; payload?: unknown },
+) {
+  const result = await browser.tabs.sendMessage(message.targetTabId, {
+    type: NATIVE_AUTOMATION_PAGE_CONTROL_MESSAGE,
+    action: message.action,
+    payload: message.payload,
+  });
+  return result;
+}
+
 export default defineBackground(() => {
   // 监听扩展安装事件
   browser.runtime.onInstalled.addListener(async ({ reason }) => {
@@ -176,6 +238,24 @@ export default defineBackground(() => {
 
   // Handle messages from content script
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === NATIVE_AUTOMATION_TAB_CONTROL_MESSAGE) {
+      handleNativeAutomationTabControl(message)
+        .then(sendResponse)
+        .catch((error) => sendResponse({
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      return true;
+    }
+    if (message.type === NATIVE_AUTOMATION_PAGE_CONTROL_MESSAGE) {
+      handleNativeAutomationPageControl(message)
+        .then(sendResponse)
+        .catch((error) => sendResponse({
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      return true;
+    }
     if (message.type === 'OPEN_SIDEPANEL') {
       openSidePanel(sender.tab?.id).catch((error) => {
         console.error('Failed to open side panel:', error);

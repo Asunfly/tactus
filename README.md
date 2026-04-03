@@ -56,6 +56,12 @@ Tactus is the first product to implement the Agent Skills specification in a bro
 - **Context Awareness** - AI determines whether to call page extraction tool; skips if skill script provides content
 - **Raw Extraction Mode** - Configure specific websites to skip Readability algorithm and extract raw page content directly
 
+### 🧭 Native Browser Automation
+
+- **Extension-Native Runtime** - Browser automation runs inside the extension without requiring a local Playwright gateway
+- **Cross-Tab Workflow** - AI can observe pages, operate DOM elements, and switch tabs within the current window
+- **Page-Agent Inspired Engine** - The execution layer follows the page-agent style DOM controller approach while staying integrated with Tactus's own agent and tool loop
+
 <!-- Page Interaction Demo  -->
 ![Page Interaction Demo](resources/page-interaction.png)
 

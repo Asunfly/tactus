@@ -44,6 +44,14 @@ const toolStatusTexts: ToolStatusMap = {
   activate_skill: '正在激活 Skill...',
   execute_skill_script: '正在执行脚本...',
   read_skill_file: '正在读取文件...',
+  browser_observe: '正在观察当前网页状态...',
+  browser_click: '正在点击页面元素...',
+  browser_input: '正在输入页面内容...',
+  browser_select_option: '正在选择页面选项...',
+  browser_scroll: '正在滚动页面...',
+  browser_wait: '正在等待页面变化...',
+  browser_exec_js: '正在执行页面脚本...',
+  browser_tabs: '正在管理浏览器标签页...',
 };
 
 // 导出 MCP 相关函数
@@ -143,6 +151,131 @@ export const availableTools: FunctionTool[] = [
           file_path: { type: 'string', description: '引用文件路径' },
         },
         required: ['skill_name', 'file_path'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_observe',
+      description: '观察当前自动化目标页面，返回当前窗口内可自动化标签页列表以及页面中可交互元素的文本化状态。执行页面交互前优先调用此工具。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_click',
+      description: '按 browser_observe 返回的元素 index 点击页面中的可交互元素。',
+      parameters: {
+        type: 'object',
+        properties: {
+          index: { type: 'number', description: '元素索引，由 browser_observe 返回的页面状态提供' },
+        },
+        required: ['index'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_input',
+      description: '按 browser_observe 返回的元素 index 向输入框写入文本。',
+      parameters: {
+        type: 'object',
+        properties: {
+          index: { type: 'number', description: '输入元素索引，由 browser_observe 返回的页面状态提供' },
+          text: { type: 'string', description: '要输入的文本' },
+        },
+        required: ['index', 'text'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_select_option',
+      description: '按 browser_observe 返回的元素 index 选择下拉框中的指定选项文本。',
+      parameters: {
+        type: 'object',
+        properties: {
+          index: { type: 'number', description: '下拉框元素索引，由 browser_observe 返回的页面状态提供' },
+          text: { type: 'string', description: '要选择的选项文本' },
+        },
+        required: ['index', 'text'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_scroll',
+      description: '滚动当前页面或某个可滚动元素。可按页数滚动，也可按像素滚动。',
+      parameters: {
+        type: 'object',
+        properties: {
+          down: { type: 'boolean', description: '是否向下滚动，默认 true' },
+          num_pages: { type: 'number', description: '滚动多少页，默认 0.5' },
+          pixels: { type: 'number', description: '可选，按像素滚动' },
+          index: { type: 'number', description: '可选，滚动特定元素而不是整个页面' },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_wait',
+      description: '等待一段时间，让页面完成加载、跳转或异步更新。',
+      parameters: {
+        type: 'object',
+        properties: {
+          seconds: { type: 'number', description: '等待秒数，默认 1 秒' },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_exec_js',
+      description: '在当前自动化目标页面执行一段 JavaScript。仅在普通 DOM 工具无法完成任务时使用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          script: { type: 'string', description: '要执行的 JavaScript 代码片段' },
+        },
+        required: ['script'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_tabs',
+      description: '管理当前窗口中的浏览器标签页，支持 list、new、select、close。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', description: '标签页动作：list | new | select | close' },
+          index: { type: 'number', description: '标签页索引，select/close 时使用 browser_tabs list 的编号' },
+          url: { type: 'string', description: 'new 动作时要打开的目标 URL' },
+        },
+        required: ['action'],
         additionalProperties: false,
       },
     },
@@ -317,6 +450,12 @@ export function generateContextPrompt(context?: {
 
   return `## 当前上下文
 ${hints.join('\n')}${skillsPrompt}${mcpPrompt}
+
+## 浏览器自动化
+- 你可以使用 browser_* 内置工具直接操作浏览器页面和当前窗口中的标签页
+- 执行 browser_click、browser_input、browser_select_option 前，优先调用 browser_observe 获取最新页面状态
+- 进行跨标签页任务时，优先使用 browser_tabs 管理标签页，再继续调用页面交互工具
+- browser_observe 返回的元素索引只对最新一次观察结果有效，不要复用旧索引
 
 ## 重要提示
 - 不要假设页面内容，必须通过工具获取真实内容

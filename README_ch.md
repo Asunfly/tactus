@@ -56,6 +56,12 @@ Tactus 是首个在浏览器扩展中实现 Agent Skills 规范的产品：
 - **上下文感知** - AI 自行判断是否调用网页提取工具，如果 skill 脚本有提供则不会重复提取
 - **原始提取模式** - 支持配置特定网站跳过 Readability 算法，直接提取页面原始内容
 
+### 🧭 原生浏览器自动化
+
+- **扩展内原生 Runtime** - 浏览器自动化直接运行在扩展内部，不再依赖本地 Playwright gateway
+- **当前窗口跨标签页操作** - AI 可以观察页面、执行 DOM 交互，并在当前窗口内切换标签页继续任务
+- **参考 page-agent 的执行引擎** - 底层执行层借鉴 page-agent 的 DOM controller 思路，但继续由 Tactus 自己的 agent 和 tool loop 驱动
+
 <!-- 页面交互演示 -->
 ![页面交互演示](resources/page-interaction.png)
 

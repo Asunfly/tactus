@@ -51,6 +51,9 @@ import {
 import { streamChat, getLastApiMessages, setLastApiMessages, ApiError, type ToolExecutor, type ApiMessage } from '../../utils/api';
 import { extractPageContent, truncateContent } from '../../utils/pageExtractor';
 import { getToolStatusText, isMcpTool, parseMcpToolName, type ToolCall, type ToolResult, type SkillInfo } from '../../utils/tools';
+import { createNativeAutomationBridge } from '../../utils/nativeAutomationExtension';
+import { NativeAutomationRuntime } from '../../utils/nativeAutomationRuntime';
+import { resolveNativeAutomationTabAction } from '../../utils/nativeAutomationShared';
 import { shouldSubmitOnEnter } from '../../utils/enterSubmit';
 import { getAllSkills, getSkillByName, getSkillFileAsText, type Skill } from '../../utils/skills';
 import { executeScript, setScriptConfirmCallback, type ScriptConfirmationRequest } from '../../utils/skillsExecutor';
@@ -305,6 +308,14 @@ const isTabLocked = computed(() => {
 
 // 锁定时记住的 tabId，确保内容获取和脚本执行在正确的标签页上执行
 const lockedTabId = ref<number | null>(null);
+
+const nativeAutomationRuntimeRef = shallowRef<NativeAutomationRuntime | null>(null);
+function getNativeAutomationRuntime(): NativeAutomationRuntime {
+  if (!nativeAutomationRuntimeRef.value) {
+    nativeAutomationRuntimeRef.value = new NativeAutomationRuntime(createNativeAutomationBridge());
+  }
+  return nativeAutomationRuntimeRef.value;
+}
 
 // 捕获当前活跃标签页 ID 并锁定
 async function captureLockedTab(): Promise<void> {
@@ -1468,6 +1479,11 @@ async function extractCleanPageContent(): Promise<string> {
 
 // 工具执行器
 const toolExecutor: ToolExecutor = async (toolCall: ToolCall): Promise<ToolResult> => {
+  const nativeAutomationRuntime = getNativeAutomationRuntime();
+  if (lockedTabId.value) {
+    nativeAutomationRuntime.seedCurrentTabId(lockedTabId.value);
+  }
+
   switch (toolCall.name) {
     case 'extract_page_content': {
       const content = await extractCleanPageContent();
@@ -1581,6 +1597,95 @@ ${skill.references.length > 0
         name: toolCall.name,
         result: content,
         success: true,
+      };
+    }
+    case 'browser_observe': {
+      const runtimeResult = await nativeAutomationRuntime.observe();
+      return {
+        tool_call_id: toolCall.id,
+        name: toolCall.name,
+        result: runtimeResult.result,
+        success: runtimeResult.success,
+      };
+    }
+    case 'browser_click': {
+      const runtimeResult = await nativeAutomationRuntime.click(Number(toolCall.arguments.index));
+      return {
+        tool_call_id: toolCall.id,
+        name: toolCall.name,
+        result: runtimeResult.result,
+        success: runtimeResult.success,
+      };
+    }
+    case 'browser_input': {
+      const runtimeResult = await nativeAutomationRuntime.input(
+        Number(toolCall.arguments.index),
+        String(toolCall.arguments.text ?? ''),
+      );
+      return {
+        tool_call_id: toolCall.id,
+        name: toolCall.name,
+        result: runtimeResult.result,
+        success: runtimeResult.success,
+      };
+    }
+    case 'browser_select_option': {
+      const runtimeResult = await nativeAutomationRuntime.selectOption(
+        Number(toolCall.arguments.index),
+        String(toolCall.arguments.text ?? ''),
+      );
+      return {
+        tool_call_id: toolCall.id,
+        name: toolCall.name,
+        result: runtimeResult.result,
+        success: runtimeResult.success,
+      };
+    }
+    case 'browser_scroll': {
+      const runtimeResult = await nativeAutomationRuntime.scroll(toolCall.arguments || {});
+      return {
+        tool_call_id: toolCall.id,
+        name: toolCall.name,
+        result: runtimeResult.result,
+        success: runtimeResult.success,
+      };
+    }
+    case 'browser_wait': {
+      const runtimeResult = await nativeAutomationRuntime.wait(
+        typeof toolCall.arguments.seconds === 'number' ? toolCall.arguments.seconds : 1,
+      );
+      return {
+        tool_call_id: toolCall.id,
+        name: toolCall.name,
+        result: runtimeResult.result,
+        success: runtimeResult.success,
+      };
+    }
+    case 'browser_exec_js': {
+      const runtimeResult = await nativeAutomationRuntime.executeJs(String(toolCall.arguments.script ?? ''));
+      return {
+        tool_call_id: toolCall.id,
+        name: toolCall.name,
+        result: runtimeResult.result,
+        success: runtimeResult.success,
+      };
+    }
+    case 'browser_tabs': {
+      const action = resolveNativeAutomationTabAction(toolCall.arguments);
+      if (!action) {
+        return {
+          tool_call_id: toolCall.id,
+          name: toolCall.name,
+          result: 'browser_tabs 的 action 参数无效，仅支持 list/new/select/close。',
+          success: false,
+        };
+      }
+      const runtimeResult = await nativeAutomationRuntime.tabs(action);
+      return {
+        tool_call_id: toolCall.id,
+        name: toolCall.name,
+        result: runtimeResult.result,
+        success: runtimeResult.success,
       };
     }
     default: {

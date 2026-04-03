@@ -27,6 +27,7 @@ export default defineConfig({
         'storage',
         'unlimitedStorage',
         'activeTab',
+        'tabs',
         'scripting',
         'identity',
         ...(isFirefox ? [] : ['sidePanel']),

@@ -1,7 +1,9 @@
 import { createApp } from 'vue';
+import { PageController } from '@page-agent/page-controller';
 import FloatingButton from '../components/FloatingButton.vue';
 import SideFloatingBall from '../components/SideFloatingBall.vue';
 import { getFloatingBallEnabled, watchFloatingBallEnabled, getSelectionQuoteEnabled, watchSelectionQuoteEnabled } from '../utils/storage';
+import { NATIVE_AUTOMATION_PAGE_CONTROL_MESSAGE } from '../utils/nativeAutomationShared';
 
 // 获取选区末尾的精确位置（视口坐标，用于 fixed 定位）
 function getSelectionEndPosition(): { x: number; y: number } | null {
@@ -40,6 +42,78 @@ export default defineContentScript({
   cssInjectionMode: 'ui',
 
   async main(ctx) {
+    let nativePageController: PageController | null = null;
+    const getNativePageController = (): PageController => {
+      if (!nativePageController) {
+        nativePageController = new PageController({
+          enableMask: false,
+          viewportExpansion: 400,
+        });
+      }
+      return nativePageController;
+    };
+
+    browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+      if (message?.type !== NATIVE_AUTOMATION_PAGE_CONTROL_MESSAGE) {
+        return undefined;
+      }
+
+      const controller = getNativePageController() as any;
+      const { action, payload } = message;
+      const methodName = (() => {
+        switch (action) {
+          case 'get_browser_state':
+            return 'getBrowserState';
+          case 'update_tree':
+            return 'updateTree';
+          case 'clean_up_highlights':
+            return 'cleanUpHighlights';
+          case 'click_element':
+            return 'clickElement';
+          case 'input_text':
+            return 'inputText';
+          case 'select_option':
+            return 'selectOption';
+          case 'scroll':
+            return 'scroll';
+          case 'scroll_horizontally':
+            return 'scrollHorizontally';
+          case 'execute_javascript':
+            return 'executeJavascript';
+          default:
+            return null;
+        }
+      })();
+
+      if (!methodName || typeof controller[methodName] !== 'function') {
+        sendResponse({
+          success: false,
+          error: `未知的自动化页面动作: ${String(action)}`,
+        });
+        return undefined;
+      }
+
+      Promise.resolve(controller[methodName](...(Array.isArray(payload) ? payload : [])))
+        .then((result: unknown) => {
+          if (typeof result === 'object' && result !== null && 'success' in (result as Record<string, unknown>)) {
+            sendResponse(result);
+            return;
+          }
+          sendResponse({
+            success: true,
+            ...(typeof result === 'object' && result !== null ? result as Record<string, unknown> : { result }),
+          });
+        })
+        .catch((error: unknown) => {
+          sendResponse({
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+
+      return true;
+    });
+
     let floatingUI: any = null;
     let sideFloatingBallUI: any = null;
     let selectedText = '';
