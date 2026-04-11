@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   getPageControllerHighlightConfig,
+  getPageAgentHighlightVisibilityCss,
   resolveSessionAutomationEnabled,
   shouldAllowBrowserAutomation,
   shouldShowBrowserAutomationEntry,
@@ -34,8 +35,13 @@ describe('browserAutomationSettings', () => {
 
   it('maps enabled highlight mode to visible page-agent highlight config', () => {
     expect(getPageControllerHighlightConfig(true)).toEqual({
-      highlightOpacity: 0,
+      highlightOpacity: 0.1,
       highlightLabelOpacity: 0.1,
     });
+  });
+
+  it('hides page-agent labels with explicit CSS when highlight is disabled', () => {
+    expect(getPageAgentHighlightVisibilityCss(false)).toContain('.playwright-highlight-label');
+    expect(getPageAgentHighlightVisibilityCss(true)).toBe('');
   });
 });

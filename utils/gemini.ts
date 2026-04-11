@@ -16,6 +16,7 @@ import {
   generateContextPrompt,
   getToolStatusText,
 } from './tools';
+import { rollbackToolIterationMessages, shouldContinueAfterToolResult } from './toolResultPolicy';
 import type { ChatMessage } from './db';
 
 // ============ Gemini Types ============
@@ -923,6 +924,7 @@ export async function* streamChatGemini(
         },
       }));
 
+      const assistantMessageIndex = currentMessages.length;
       currentMessages.push({
         role: 'assistant',
         content: fullContent || null,
@@ -960,7 +962,16 @@ export async function* streamChatGemini(
         const result = await toolExecutor(toolCall);
         yield { type: 'tool_result', result };
 
-        if (!result.success) {
+        currentMessages.push({
+          role: 'tool',
+          content: result.result,
+          tool_call_id: tc.id,
+          name: tc.name,
+        });
+
+        setLastApiMessages([...currentMessages]);
+
+        if (!result.success && !shouldContinueAfterToolResult(result)) {
           hasExecutionError = true;
           toolCallRetryCount++;
 
@@ -979,19 +990,11 @@ export async function* streamChatGemini(
           };
           break;
         }
-
-        currentMessages.push({
-          role: 'tool',
-          content: result.result,
-          tool_call_id: tc.id,
-          name: tc.name,
-        });
-
-        setLastApiMessages([...currentMessages]);
       }
 
       if (hasExecutionError) {
-        currentMessages.pop();
+        currentMessages = rollbackToolIterationMessages(currentMessages, assistantMessageIndex);
+        setLastApiMessages([...currentMessages]);
         continue;
       }
 

@@ -10,8 +10,10 @@ import {
   getBrowserAutomationHighlightEnabled,
   watchBrowserAutomationHighlightEnabled,
 } from '../utils/storage';
-import { getPageControllerHighlightConfig } from '../utils/browserAutomationSettings';
+import { getPageAgentHighlightVisibilityCss, getPageControllerHighlightConfig } from '../utils/browserAutomationSettings';
 import { NATIVE_AUTOMATION_PAGE_CONTROL_MESSAGE } from '../utils/nativeAutomationShared';
+
+const PAGE_AGENT_HIGHLIGHT_STYLE_ID = 'tactus-page-agent-highlight-visibility';
 
 // 获取选区末尾的精确位置（视口坐标，用于 fixed 定位）
 function getSelectionEndPosition(): { x: number; y: number } | null {
@@ -51,6 +53,21 @@ export default defineContentScript({
 
   async main(ctx) {
     let browserAutomationHighlightEnabled = await getBrowserAutomationHighlightEnabled();
+    const applyHighlightVisibilityStyle = () => {
+      let styleEl = document.getElementById(PAGE_AGENT_HIGHLIGHT_STYLE_ID) as HTMLStyleElement | null;
+      const cssText = getPageAgentHighlightVisibilityCss(browserAutomationHighlightEnabled);
+      if (!cssText) {
+        styleEl?.remove();
+        return;
+      }
+      if (!styleEl) {
+        styleEl = document.createElement('style');
+        styleEl.id = PAGE_AGENT_HIGHLIGHT_STYLE_ID;
+        document.documentElement.appendChild(styleEl);
+      }
+      styleEl.textContent = cssText;
+    };
+    applyHighlightVisibilityStyle();
     let nativePageController: PageController | null = null;
     const disposeNativePageController = async (): Promise<void> => {
       if (!nativePageController) return;
@@ -151,6 +168,7 @@ export default defineContentScript({
     watchBrowserAutomationHighlightEnabled((enabled) => {
       if (browserAutomationHighlightEnabled === enabled) return;
       browserAutomationHighlightEnabled = enabled;
+      applyHighlightVisibilityStyle();
       void disposeNativePageController();
     });
 

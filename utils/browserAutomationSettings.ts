@@ -22,7 +22,30 @@ export function getPageControllerHighlightConfig(highlightEnabled: boolean): {
   }
 
   return {
-    highlightOpacity: 0,
+    highlightOpacity: 0.1,
     highlightLabelOpacity: 0.1,
   };
+}
+
+export function getPageAgentHighlightVisibilityCss(highlightEnabled: boolean): string {
+  if (highlightEnabled) {
+    return '';
+  }
+
+  return `
+#playwright-highlight-container {
+  pointer-events: none !important;
+}
+
+#playwright-highlight-container .playwright-highlight-label {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  color: transparent !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border: 0 !important;
+  text-shadow: none !important;
+}
+`;
 }
