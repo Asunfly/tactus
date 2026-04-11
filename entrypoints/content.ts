@@ -2,7 +2,15 @@ import { createApp } from 'vue';
 import { PageController } from '@page-agent/page-controller';
 import FloatingButton from '../components/FloatingButton.vue';
 import SideFloatingBall from '../components/SideFloatingBall.vue';
-import { getFloatingBallEnabled, watchFloatingBallEnabled, getSelectionQuoteEnabled, watchSelectionQuoteEnabled } from '../utils/storage';
+import {
+  getFloatingBallEnabled,
+  watchFloatingBallEnabled,
+  getSelectionQuoteEnabled,
+  watchSelectionQuoteEnabled,
+  getBrowserAutomationHighlightEnabled,
+  watchBrowserAutomationHighlightEnabled,
+} from '../utils/storage';
+import { getPageControllerHighlightConfig } from '../utils/browserAutomationSettings';
 import { NATIVE_AUTOMATION_PAGE_CONTROL_MESSAGE } from '../utils/nativeAutomationShared';
 
 // 获取选区末尾的精确位置（视口坐标，用于 fixed 定位）
@@ -42,12 +50,22 @@ export default defineContentScript({
   cssInjectionMode: 'ui',
 
   async main(ctx) {
+    let browserAutomationHighlightEnabled = await getBrowserAutomationHighlightEnabled();
     let nativePageController: PageController | null = null;
+    const disposeNativePageController = async (): Promise<void> => {
+      if (!nativePageController) return;
+      try {
+        await (nativePageController as any).cleanUpHighlights?.();
+      } catch {}
+      nativePageController.dispose();
+      nativePageController = null;
+    };
     const getNativePageController = (): PageController => {
       if (!nativePageController) {
         nativePageController = new PageController({
           enableMask: false,
           viewportExpansion: 400,
+          ...getPageControllerHighlightConfig(browserAutomationHighlightEnabled),
         });
       }
       return nativePageController;
@@ -60,6 +78,10 @@ export default defineContentScript({
 
       const controller = getNativePageController() as any;
       const { action, payload } = message;
+      if (action === 'ping') {
+        sendResponse({ success: true });
+        return undefined;
+      }
       const methodName = (() => {
         switch (action) {
           case 'get_browser_state':
@@ -126,6 +148,11 @@ export default defineContentScript({
     // 获取设置
     floatingBallEnabled = await getFloatingBallEnabled();
     selectionQuoteEnabled = await getSelectionQuoteEnabled();
+    watchBrowserAutomationHighlightEnabled((enabled) => {
+      if (browserAutomationHighlightEnabled === enabled) return;
+      browserAutomationHighlightEnabled = enabled;
+      void disposeNativePageController();
+    });
 
     // 创建右侧悬浮球
     const createSideFloatingBall = async () => {
@@ -260,6 +287,10 @@ export default defineContentScript({
         floatingUI = null;
       }
     });
+
+    window.addEventListener('pagehide', () => {
+      void disposeNativePageController();
+    }, { once: true });
   },
 });
 

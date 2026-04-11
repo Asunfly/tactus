@@ -28,6 +28,7 @@ export interface NativeAutomationBridge {
   getTab(tabId: number): Promise<NativeAutomationTabInfo | null>;
   activateTab(tabId: number): Promise<void>;
   openTab(url: string): Promise<NativeAutomationTabInfo>;
+  waitForPageReady(tabId: number): Promise<void>;
   closeTab(tabId: number): Promise<void>;
   getBrowserState(tabId: number): Promise<NativeAutomationBrowserState>;
   clickElement(tabId: number, index: number): Promise<NativeAutomationActionResult>;
@@ -66,6 +67,18 @@ export class NativeAutomationRuntime {
     return extractIndexedElementHint(this.lastObservedContent, index);
   }
 
+  private isRecoverablePageError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.includes('Receiving end does not exist')
+      || message.includes('等待页面内容脚本就绪超时')
+      || message.includes('页面内容脚本尚未就绪');
+  }
+
+  private formatRecoverablePageMessage(actionLabel: string, error: unknown): string {
+    const message = error instanceof Error ? error.message : String(error);
+    return `当前标签页暂时无法${actionLabel}，可能是页面限制了扩展脚本注入、仍在跳转，或页面结构对自动化不友好。\n\n详细错误：${message}\n\n建议：等待几秒后重试，或切换到其他标签页继续。`;
+  }
+
   async observe(): Promise<NativeAutomationToolResult> {
     const target = await this.ensureCurrentTarget();
     if (!target) {
@@ -75,10 +88,23 @@ export class NativeAutomationRuntime {
       };
     }
 
-    const [tabsMarkdown, browserState] = await Promise.all([
-      this.renderTabsMarkdown(target.windowId),
-      this.bridge.getBrowserState(target.id),
-    ]);
+    let tabsMarkdown = '';
+    let browserState: NativeAutomationBrowserState;
+    try {
+      [tabsMarkdown, browserState] = await Promise.all([
+        this.renderTabsMarkdown(target.windowId),
+        this.bridge.getBrowserState(target.id),
+      ]);
+    } catch (error) {
+      if (this.isRecoverablePageError(error)) {
+        tabsMarkdown = await this.renderTabsMarkdown(target.windowId);
+        return {
+          success: true,
+          result: `## Browser Tabs\n${tabsMarkdown}\n\n## Current Page\n${this.formatRecoverablePageMessage('自动化观察', error)}`,
+        };
+      }
+      throw error;
+    }
     this.lastObservedContent = browserState.content;
 
     return {
@@ -147,10 +173,20 @@ export class NativeAutomationRuntime {
           };
         }
         const opened = await this.bridge.openTab(action.url);
+        let readinessWarning = '';
+        try {
+          await this.bridge.waitForPageReady(opened.id);
+        } catch (error) {
+          if (this.isRecoverablePageError(error)) {
+            readinessWarning = `\n\n${this.formatRecoverablePageMessage('连接目标页面', error)}`;
+          } else {
+            throw error;
+          }
+        }
         this.currentTabId = opened.id;
         return {
           success: true,
-          result: `已打开并切换到新标签页：${opened.url ?? action.url}\n\n${await this.renderTabsMarkdown(opened.windowId)}`,
+          result: `已打开并切换到新标签页：${opened.url ?? action.url}\n\n${await this.renderTabsMarkdown(opened.windowId)}${readinessWarning}`,
         };
       }
       case 'select': {
@@ -162,10 +198,20 @@ export class NativeAutomationRuntime {
           };
         }
         await this.bridge.activateTab(target.id);
+        let readinessWarning = '';
+        try {
+          await this.bridge.waitForPageReady(target.id);
+        } catch (error) {
+          if (this.isRecoverablePageError(error)) {
+            readinessWarning = `\n\n${this.formatRecoverablePageMessage('连接目标页面', error)}`;
+          } else {
+            throw error;
+          }
+        }
         this.currentTabId = target.id;
         return {
           success: true,
-          result: `已切换到标签页：${target.title || target.url || `Tab ${target.id}`}`,
+          result: `已切换到标签页：${target.title || target.url || `Tab ${target.id}`}${readinessWarning}`,
         };
       }
       case 'close': {
@@ -200,7 +246,18 @@ export class NativeAutomationRuntime {
       };
     }
 
-    const result = await runner(target);
+    let result: NativeAutomationActionResult;
+    try {
+      result = await runner(target);
+    } catch (error) {
+      if (this.isRecoverablePageError(error)) {
+        return {
+          success: true,
+          result: this.formatRecoverablePageMessage('执行页面操作', error),
+        };
+      }
+      throw error;
+    }
     return {
       success: result.success,
       result: result.message,

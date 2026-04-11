@@ -185,6 +185,11 @@ function normalizePositiveInt(value: number, fallback: number): number {
   return normalized > 0 ? normalized : fallback;
 }
 
+function normalizeIntInRange(value: number, fallback: number, min: number, max: number): number {
+  const normalized = normalizePositiveInt(value, fallback);
+  return Math.min(max, Math.max(min, normalized));
+}
+
 export async function getMaxPageContentLength(): Promise<number> {
   const value = await maxPageContentLengthStorage.getValue();
   return normalizePositiveInt(value, 30000);
@@ -204,6 +209,28 @@ export function watchMaxPageContentLength(callback: (value: number) => void): ()
 
 const maxToolCallsStorage = storage.defineItem<number>('local:maxToolCalls', {
   fallback: 100,
+});
+
+// ==================== Browser Automation Settings ====================
+
+const browserAutomationEnabledStorage = storage.defineItem<boolean>('local:browserAutomationEnabled', {
+  fallback: true,
+});
+
+const browserAutomationHighlightEnabledStorage = storage.defineItem<boolean>('local:browserAutomationHighlightEnabled', {
+  fallback: false,
+});
+
+const browserAutomationMaxIterationsStorage = storage.defineItem<number>('local:browserAutomationMaxIterations', {
+  fallback: 20,
+});
+
+const browserAutomationPageReadyTimeoutMsStorage = storage.defineItem<number>('local:browserAutomationPageReadyTimeoutMs', {
+  fallback: 7000,
+});
+
+const modelRequestMaxRetriesStorage = storage.defineItem<number>('local:modelRequestMaxRetries', {
+  fallback: 5,
 });
 
 // ==================== Preset Actions Settings ====================
@@ -273,6 +300,79 @@ export async function setMaxToolCalls(value: number): Promise<void> {
 export function watchMaxToolCalls(callback: (value: number) => void): () => void {
   return maxToolCallsStorage.watch((newValue) => {
     callback(normalizePositiveInt(newValue, 100));
+  });
+}
+
+export async function getBrowserAutomationEnabled(): Promise<boolean> {
+  return await browserAutomationEnabledStorage.getValue();
+}
+
+export async function setBrowserAutomationEnabled(enabled: boolean): Promise<void> {
+  await browserAutomationEnabledStorage.setValue(Boolean(enabled));
+}
+
+export function watchBrowserAutomationEnabled(callback: (enabled: boolean) => void): () => void {
+  return browserAutomationEnabledStorage.watch((newValue) => {
+    callback(Boolean(newValue));
+  });
+}
+
+export async function getBrowserAutomationHighlightEnabled(): Promise<boolean> {
+  return await browserAutomationHighlightEnabledStorage.getValue();
+}
+
+export async function setBrowserAutomationHighlightEnabled(enabled: boolean): Promise<void> {
+  await browserAutomationHighlightEnabledStorage.setValue(Boolean(enabled));
+}
+
+export function watchBrowserAutomationHighlightEnabled(callback: (enabled: boolean) => void): () => void {
+  return browserAutomationHighlightEnabledStorage.watch((newValue) => {
+    callback(Boolean(newValue));
+  });
+}
+
+export async function getBrowserAutomationMaxIterations(): Promise<number> {
+  const value = await browserAutomationMaxIterationsStorage.getValue();
+  return normalizeIntInRange(value, 20, 1, 100);
+}
+
+export async function setBrowserAutomationMaxIterations(value: number): Promise<void> {
+  await browserAutomationMaxIterationsStorage.setValue(normalizeIntInRange(value, 20, 1, 100));
+}
+
+export function watchBrowserAutomationMaxIterations(callback: (value: number) => void): () => void {
+  return browserAutomationMaxIterationsStorage.watch((newValue) => {
+    callback(normalizeIntInRange(newValue, 20, 1, 100));
+  });
+}
+
+export async function getBrowserAutomationPageReadyTimeoutMs(): Promise<number> {
+  const value = await browserAutomationPageReadyTimeoutMsStorage.getValue();
+  return normalizeIntInRange(value, 7000, 1000, 60000);
+}
+
+export async function setBrowserAutomationPageReadyTimeoutMs(value: number): Promise<void> {
+  await browserAutomationPageReadyTimeoutMsStorage.setValue(normalizeIntInRange(value, 7000, 1000, 60000));
+}
+
+export function watchBrowserAutomationPageReadyTimeoutMs(callback: (value: number) => void): () => void {
+  return browserAutomationPageReadyTimeoutMsStorage.watch((newValue) => {
+    callback(normalizeIntInRange(newValue, 7000, 1000, 60000));
+  });
+}
+
+export async function getModelRequestMaxRetries(): Promise<number> {
+  const value = await modelRequestMaxRetriesStorage.getValue();
+  return normalizeIntInRange(value, 5, 1, 10);
+}
+
+export async function setModelRequestMaxRetries(value: number): Promise<void> {
+  await modelRequestMaxRetriesStorage.setValue(normalizeIntInRange(value, 5, 1, 10));
+}
+
+export function watchModelRequestMaxRetries(callback: (value: number) => void): () => void {
+  return modelRequestMaxRetriesStorage.watch((newValue) => {
+    callback(normalizeIntInRange(newValue, 5, 1, 10));
   });
 }
 

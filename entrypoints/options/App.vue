@@ -14,6 +14,16 @@ import {
   setFloatingBallEnabled,
   getSelectionQuoteEnabled,
   setSelectionQuoteEnabled,
+  getBrowserAutomationEnabled,
+  setBrowserAutomationEnabled,
+  getBrowserAutomationHighlightEnabled,
+  setBrowserAutomationHighlightEnabled,
+  getBrowserAutomationMaxIterations,
+  setBrowserAutomationMaxIterations,
+  getBrowserAutomationPageReadyTimeoutMs,
+  setBrowserAutomationPageReadyTimeoutMs,
+  getModelRequestMaxRetries,
+  setModelRequestMaxRetries,
   getMaxPageContentLength,
   setMaxPageContentLength,
   getMaxToolCalls,
@@ -73,6 +83,11 @@ const floatingBallEnabled = ref(true);
 
 // 划词引用设置
 const selectionQuoteEnabled = ref(true);
+const browserAutomationEnabled = ref(true);
+const browserAutomationHighlightEnabled = ref(false);
+const browserAutomationMaxIterations = ref(20);
+const browserAutomationPageReadyTimeoutMs = ref(7000);
+const modelRequestMaxRetries = ref(5);
 
 // 网页内容字数上限
 const maxPageContentLength = ref(30000);
@@ -224,6 +239,11 @@ async function loadAllData() {
   currentLanguage.value = await getLanguage();
   floatingBallEnabled.value = await getFloatingBallEnabled();
   selectionQuoteEnabled.value = await getSelectionQuoteEnabled();
+  browserAutomationEnabled.value = await getBrowserAutomationEnabled();
+  browserAutomationHighlightEnabled.value = await getBrowserAutomationHighlightEnabled();
+  browserAutomationMaxIterations.value = await getBrowserAutomationMaxIterations();
+  browserAutomationPageReadyTimeoutMs.value = await getBrowserAutomationPageReadyTimeoutMs();
+  modelRequestMaxRetries.value = await getModelRequestMaxRetries();
   maxPageContentLength.value = await getMaxPageContentLength();
   maxToolCalls.value = await getMaxToolCalls();
   rawExtractSites.value = await getRawExtractSites();
@@ -531,6 +551,40 @@ async function handleFloatingBallToggle(enabled: boolean) {
 async function handleSelectionQuoteToggle(enabled: boolean) {
   selectionQuoteEnabled.value = enabled;
   await setSelectionQuoteEnabled(enabled);
+}
+
+async function handleBrowserAutomationToggle(enabled: boolean) {
+  browserAutomationEnabled.value = enabled;
+  await setBrowserAutomationEnabled(enabled);
+}
+
+async function handleBrowserAutomationHighlightToggle(enabled: boolean) {
+  browserAutomationHighlightEnabled.value = enabled;
+  await setBrowserAutomationHighlightEnabled(enabled);
+}
+
+async function handleBrowserAutomationMaxIterationsChange() {
+  const normalized = Number.isFinite(browserAutomationMaxIterations.value)
+    ? Math.max(1, Math.floor(browserAutomationMaxIterations.value))
+    : 20;
+  browserAutomationMaxIterations.value = normalized;
+  await setBrowserAutomationMaxIterations(normalized);
+}
+
+async function handleBrowserAutomationPageReadyTimeoutChange() {
+  const normalized = Number.isFinite(browserAutomationPageReadyTimeoutMs.value)
+    ? Math.max(1000, Math.floor(browserAutomationPageReadyTimeoutMs.value))
+    : 7000;
+  browserAutomationPageReadyTimeoutMs.value = normalized;
+  await setBrowserAutomationPageReadyTimeoutMs(normalized);
+}
+
+async function handleModelRequestMaxRetriesChange() {
+  const normalized = Number.isFinite(modelRequestMaxRetries.value)
+    ? Math.max(1, Math.floor(modelRequestMaxRetries.value))
+    : 5;
+  modelRequestMaxRetries.value = normalized;
+  await setModelRequestMaxRetries(normalized);
 }
 
 async function handleMaxPageContentLengthChange() {
@@ -1325,7 +1379,7 @@ function showToast(message: string) {
               </div>
               
               <div class="settings-divider"></div>
-              
+               
               <div class="settings-item">
                 <div class="settings-item-info">
                   <div class="settings-item-label">
@@ -1349,9 +1403,154 @@ function showToast(message: string) {
                   </button>
                 </div>
               </div>
-              
+
               <div class="settings-divider"></div>
-              
+
+              <div class="settings-item">
+                <div class="settings-item-info">
+                  <div class="settings-item-label">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M4 6h16v12H4z"/>
+                      <path d="M8 10h8M8 14h5"/>
+                    </svg>
+                    <span>{{ i18n('browserAutomationEnabledSetting') }}</span>
+                  </div>
+                  <p class="settings-item-desc">{{ i18n('browserAutomationEnabledDesc') }}</p>
+                </div>
+                <div class="settings-item-control">
+                  <button
+                    class="toggle-btn"
+                    :class="{ active: browserAutomationEnabled }"
+                    @click="handleBrowserAutomationToggle(!browserAutomationEnabled)"
+                  >
+                    <span class="toggle-track">
+                      <span class="toggle-thumb"></span>
+                    </span>
+                    <span class="toggle-label">{{ browserAutomationEnabled ? i18n('floatingBallEnabled') : i18n('floatingBallDisabled') }}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="settings-divider"></div>
+
+              <div class="settings-item">
+                <div class="settings-item-info">
+                  <div class="settings-item-label">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect x="3" y="3" width="18" height="18" rx="2"/>
+                      <path d="M8 8h8v8H8z"/>
+                    </svg>
+                    <span>{{ i18n('browserAutomationHighlight') }}</span>
+                  </div>
+                  <p class="settings-item-desc">{{ i18n('browserAutomationHighlightDesc') }}</p>
+                </div>
+                <div class="settings-item-control">
+                  <button
+                    class="toggle-btn"
+                    :class="{ active: browserAutomationHighlightEnabled }"
+                    @click="handleBrowserAutomationHighlightToggle(!browserAutomationHighlightEnabled)"
+                  >
+                    <span class="toggle-track">
+                      <span class="toggle-thumb"></span>
+                    </span>
+                    <span class="toggle-label">{{ browserAutomationHighlightEnabled ? i18n('floatingBallEnabled') : i18n('floatingBallDisabled') }}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="settings-divider"></div>
+
+              <div class="settings-item settings-item-vertical">
+                <div class="settings-item-info">
+                  <div class="settings-item-label">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M12 8v8M8 12h8"/>
+                      <circle cx="12" cy="12" r="9"/>
+                    </svg>
+                    <span>{{ i18n('browserAutomationMaxIterations') }}</span>
+                  </div>
+                  <p class="settings-item-desc">{{ i18n('browserAutomationMaxIterationsDesc') }}</p>
+                </div>
+                <div class="settings-item-content">
+                  <div class="site-input-row">
+                    <input
+                      v-model.number="browserAutomationMaxIterations"
+                      type="number"
+                      min="1"
+                      step="1"
+                      class="site-input"
+                      @change="handleBrowserAutomationMaxIterationsChange"
+                    />
+                    <button class="btn btn-primary btn-sm" @click="handleBrowserAutomationMaxIterationsChange">
+                      {{ i18n('save') }}
+                    </button>
+                  </div>
+                  <p class="settings-hint">{{ i18n('browserAutomationMaxIterationsHint') }}</p>
+                </div>
+              </div>
+
+              <div class="settings-divider"></div>
+
+              <div class="settings-item settings-item-vertical">
+                <div class="settings-item-info">
+                  <div class="settings-item-label">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M12 6v6l4 2"/>
+                      <circle cx="12" cy="12" r="9"/>
+                    </svg>
+                    <span>{{ i18n('browserAutomationPageReadyTimeout') }}</span>
+                  </div>
+                  <p class="settings-item-desc">{{ i18n('browserAutomationPageReadyTimeoutDesc') }}</p>
+                </div>
+                <div class="settings-item-content">
+                  <div class="site-input-row">
+                    <input
+                      v-model.number="browserAutomationPageReadyTimeoutMs"
+                      type="number"
+                      min="1000"
+                      step="500"
+                      class="site-input"
+                      @change="handleBrowserAutomationPageReadyTimeoutChange"
+                    />
+                    <button class="btn btn-primary btn-sm" @click="handleBrowserAutomationPageReadyTimeoutChange">
+                      {{ i18n('save') }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="settings-divider"></div>
+
+              <div class="settings-item settings-item-vertical">
+                <div class="settings-item-info">
+                  <div class="settings-item-label">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M3 12h6M15 12h6M12 3v6M12 15v6"/>
+                      <circle cx="12" cy="12" r="3"/>
+                    </svg>
+                    <span>{{ i18n('modelRequestMaxRetries') }}</span>
+                  </div>
+                  <p class="settings-item-desc">{{ i18n('modelRequestMaxRetriesDesc') }}</p>
+                </div>
+                <div class="settings-item-content">
+                  <div class="site-input-row">
+                    <input
+                      v-model.number="modelRequestMaxRetries"
+                      type="number"
+                      min="1"
+                      step="1"
+                      class="site-input"
+                      @change="handleModelRequestMaxRetriesChange"
+                    />
+                    <button class="btn btn-primary btn-sm" @click="handleModelRequestMaxRetriesChange">
+                      {{ i18n('save') }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+               
+              <div class="settings-divider"></div>
+               
               <div class="settings-item settings-item-vertical">
                 <div class="settings-item-info">
                   <div class="settings-item-label">

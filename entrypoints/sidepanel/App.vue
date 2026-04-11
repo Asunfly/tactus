@@ -18,6 +18,12 @@ import {
   getResolvedTheme,
   getSelectionQuoteEnabled,
   watchSelectionQuoteEnabled,
+  getBrowserAutomationEnabled,
+  watchBrowserAutomationEnabled,
+  getBrowserAutomationMaxIterations,
+  watchBrowserAutomationMaxIterations,
+  getModelRequestMaxRetries,
+  watchModelRequestMaxRetries,
   getMaxPageContentLength,
   watchMaxPageContentLength,
   getMaxToolCalls,
@@ -48,7 +54,7 @@ import {
   type ChatMessage,
   type ChatSession,
 } from '../../utils/db';
-import { streamChat, getLastApiMessages, setLastApiMessages, ApiError, type ToolExecutor, type ApiMessage } from '../../utils/api';
+import { streamChat, getLastApiMessages, setLastApiMessages, ApiError, DEFAULT_RETRY_CONFIG, type ToolExecutor, type ApiMessage } from '../../utils/api';
 import { extractPageContent, truncateContent } from '../../utils/pageExtractor';
 import { getToolStatusText, isMcpTool, parseMcpToolName, type ToolCall, type ToolResult, type SkillInfo } from '../../utils/tools';
 import { createNativeAutomationBridge } from '../../utils/nativeAutomationExtension';
@@ -61,6 +67,11 @@ import {
   type AutomationMode,
   type AutomationSessionState,
 } from '../../utils/nativeAutomationPolicy';
+import {
+  resolveSessionAutomationEnabled,
+  shouldAllowBrowserAutomation,
+  shouldShowBrowserAutomationEntry,
+} from '../../utils/browserAutomationSettings';
 import { shouldSubmitOnEnter } from '../../utils/enterSubmit';
 import { getAllSkills, getSkillByName, getSkillFileAsText, type Skill } from '../../utils/skills';
 import { executeScript, setScriptConfirmCallback, type ScriptConfirmationRequest } from '../../utils/skillsExecutor';
@@ -247,6 +258,9 @@ const toolStatus = ref<string | null>(null); // 工具执行状态提示
 const maxPageContentLength = ref(30000);
 const maxToolCalls = ref(100);
 const selectionQuoteEnabled = ref(true);
+const browserAutomationEnabled = ref(true);
+const browserAutomationMaxIterations = ref(20);
+const modelRequestMaxRetries = ref(5);
 const imageInputRef = ref<HTMLInputElement | null>(null);
 const pendingImages = ref<ChatImage[]>([]);
 const isImageDragActive = ref(false);
@@ -337,7 +351,10 @@ function getNativeAutomationRuntime(): NativeAutomationRuntime {
 
 function syncAutomationSessionToCurrentSession(): void {
   if (!currentSession.value) return;
-  currentSession.value.automationEnabled = automationSession.value.enabled;
+  currentSession.value.automationEnabled = resolveSessionAutomationEnabled(
+    browserAutomationEnabled.value,
+    automationSession.value.enabled,
+  );
   currentSession.value.automationMode = automationSession.value.mode;
 }
 
@@ -355,6 +372,14 @@ const automationChipLabel = computed(() => {
   return currentLanguage.value === 'zh-CN'
     ? `自动化：${getAutomationModeLabel(automationSession.value.mode)}`
     : `Automation: ${getAutomationModeLabel(automationSession.value.mode)}`;
+});
+
+const showBrowserAutomationEntry = computed(() => {
+  return shouldShowBrowserAutomationEntry(browserAutomationEnabled.value);
+});
+
+const browserAutomationToolsEnabled = computed(() => {
+  return shouldAllowBrowserAutomation(browserAutomationEnabled.value, automationSession.value.enabled);
 });
 
 const automationChipTitle = computed(() => {
@@ -394,6 +419,12 @@ async function applyAutomationMode(next: { enabled: boolean; mode: AutomationMod
 }
 
 async function setAutomationMode(nextMode: 'off' | AutomationMode): Promise<void> {
+  if (!browserAutomationEnabled.value) {
+    automationSession.value = createAutomationSessionState();
+    showAutomationModeModal.value = false;
+    return;
+  }
+
   if (nextMode === 'off') {
     await applyAutomationMode(createAutomationSessionState());
     showAutomationModeModal.value = false;
@@ -759,9 +790,13 @@ async function regenerateResponse(): Promise<void> {
     const reactConfig = {
       enableTools: true,
       toolExecutor,
-      maxIterations: 10,
+      maxIterations: browserAutomationMaxIterations.value,
       maxToolCalls: maxToolCalls.value,
       abortSignal: chatAbortController.value.signal,
+    };
+    const retryConfig = {
+      ...DEFAULT_RETRY_CONFIG,
+      maxRetries: modelRequestMaxRetries.value,
     };
     
     // 构建 Skills 信息
@@ -816,10 +851,10 @@ async function regenerateResponse(): Promise<void> {
         mcpTools: mcpTools.value,
         pageInfo,
         language: currentLanguage,
-        automationEnabled: automationSession.value.enabled,
+        automationEnabled: browserAutomationToolsEnabled.value,
       },
       reactConfig,
-      undefined, // retryConfig 使用默认值
+      retryConfig,
       hasValidPreviousContext ? previousApiMessages : undefined
     )) {
       switch (event.type) {
@@ -1240,6 +1275,9 @@ const unwatchProviders = ref<(() => void) | null>(null);
 const unwatchActiveProviderId = ref<(() => void) | null>(null);
 const unwatchLanguage = ref<(() => void) | null>(null);
 const unwatchThemeMode = ref<(() => void) | null>(null);
+const unwatchBrowserAutomationEnabled = ref<(() => void) | null>(null);
+const unwatchBrowserAutomationMaxIterations = ref<(() => void) | null>(null);
+const unwatchModelRequestMaxRetries = ref<(() => void) | null>(null);
 const unwatchSelectionQuoteEnabled = ref<(() => void) | null>(null);
 const unwatchMaxPageContentLength = ref<(() => void) | null>(null);
 const unwatchMaxToolCalls = ref<(() => void) | null>(null);
@@ -1257,6 +1295,9 @@ onMounted(async () => {
   const activeProvider = await getActiveProvider();
   activeProviderId.value = activeProvider?.id || null;
   selectionQuoteEnabled.value = await getSelectionQuoteEnabled();
+  browserAutomationEnabled.value = await getBrowserAutomationEnabled();
+  browserAutomationMaxIterations.value = await getBrowserAutomationMaxIterations();
+  modelRequestMaxRetries.value = await getModelRequestMaxRetries();
   maxPageContentLength.value = await getMaxPageContentLength();
   maxToolCalls.value = await getMaxToolCalls();
   
@@ -1313,6 +1354,21 @@ onMounted(async () => {
   unwatchThemeMode.value = watchThemeMode((newMode) => {
     currentThemeMode.value = newMode;
     applyTheme(newMode);
+  });
+
+  unwatchBrowserAutomationEnabled.value = watchBrowserAutomationEnabled((enabled) => {
+    browserAutomationEnabled.value = enabled;
+    if (!enabled) {
+      automationSession.value = createAutomationSessionState();
+      showAutomationModeModal.value = false;
+      void saveCurrentSession();
+    }
+  });
+  unwatchBrowserAutomationMaxIterations.value = watchBrowserAutomationMaxIterations((value) => {
+    browserAutomationMaxIterations.value = value;
+  });
+  unwatchModelRequestMaxRetries.value = watchModelRequestMaxRetries((value) => {
+    modelRequestMaxRetries.value = value;
   });
 
   // 监听划词引用设置变化
@@ -1464,6 +1520,9 @@ onUnmounted(() => {
   unwatchActiveProviderId.value?.();
   unwatchLanguage.value?.();
   unwatchThemeMode.value?.();
+  unwatchBrowserAutomationEnabled.value?.();
+  unwatchBrowserAutomationMaxIterations.value?.();
+  unwatchModelRequestMaxRetries.value?.();
   unwatchSelectionQuoteEnabled.value?.();
   unwatchMaxPageContentLength.value?.();
   unwatchMaxToolCalls.value?.();
@@ -1621,19 +1680,19 @@ const toolExecutor: ToolExecutor = async (toolCall: ToolCall): Promise<ToolResul
     nativeAutomationRuntime.seedCurrentTabId(lockedTabId.value);
   }
   const isBrowserTool = toolCall.name.startsWith('browser_');
-  if (isBrowserTool && !automationSession.value.enabled) {
+  if (isBrowserTool && !browserAutomationToolsEnabled.value) {
     return {
       tool_call_id: toolCall.id,
       name: toolCall.name,
       result: currentLanguage.value === 'zh-CN'
-        ? '当前对话未开启浏览器自动化。请先在输入框上方启用自动化模式后再继续。'
-        : 'Browser automation is disabled for this conversation. Enable automation first.',
+        ? '浏览器自动化已关闭。请先在设置中启用浏览器自动化后再继续。'
+        : 'Browser automation is disabled. Enable it in settings first.',
       success: false,
     };
   }
 
   const maybeConfirmDangerousAutomation = async (): Promise<ToolResult | null> => {
-    if (!isBrowserTool || automationSession.value.mode === 'yolo') return null;
+    if (!isBrowserTool || !browserAutomationEnabled.value || automationSession.value.mode === 'yolo') return null;
 
     let hint: string | null = null;
     if (toolCall.name === 'browser_click' && typeof toolCall.arguments.index === 'number') {
@@ -2043,9 +2102,13 @@ async function sendMessage() {
     const reactConfig = {
       enableTools: true, // 默认启用工具
       toolExecutor,
-      maxIterations: 10,
+      maxIterations: browserAutomationMaxIterations.value,
       maxToolCalls: maxToolCalls.value,
       abortSignal: chatAbortController.value.signal,
+    };
+    const retryConfig = {
+      ...DEFAULT_RETRY_CONFIG,
+      maxRetries: modelRequestMaxRetries.value,
     };
 
     // 构建 Skills 信息
@@ -2100,10 +2163,10 @@ async function sendMessage() {
         mcpTools: mcpTools.value,
         pageInfo,
         language: currentLanguage,
-        automationEnabled: automationSession.value.enabled,
+        automationEnabled: browserAutomationToolsEnabled.value,
       },
       reactConfig,
-      undefined, // retryConfig 使用默认值
+      retryConfig,
       hasValidPreviousContext ? previousApiMessages : undefined
     )) {
       switch (event.type) {
@@ -2240,10 +2303,12 @@ async function openHistory() {
 // Load session
 async function loadSession(session: ChatSession) {
   currentSession.value = session;
-  automationSession.value = normalizeAutomationSessionState({
-    enabled: session.automationEnabled,
-    mode: session.automationMode,
-  });
+  automationSession.value = browserAutomationEnabled.value
+    ? normalizeAutomationSessionState({
+        enabled: session.automationEnabled,
+        mode: session.automationMode,
+      })
+    : createAutomationSessionState();
   messages.value = session.messages;
   // 恢复 API 上下文
   if (session.apiMessages) {
@@ -2704,7 +2769,7 @@ function rejectScript() {
           </button>
         </div>
 
-        <div class="automation-mode-row">
+        <div v-if="showBrowserAutomationEntry" class="automation-mode-row">
           <button
             class="automation-mode-chip"
             data-testid="automation-mode-chip"
@@ -2983,7 +3048,7 @@ function rejectScript() {
       </div>
     </div>
 
-    <div v-if="showAutomationModeModal" class="modal-overlay" @click.self="showAutomationModeModal = false">
+    <div v-if="showBrowserAutomationEntry && showAutomationModeModal" class="modal-overlay" @click.self="showAutomationModeModal = false">
       <div class="modal automation-mode-modal">
         <div class="modal-header">
           <h2>{{ currentLanguage === 'zh-CN' ? '浏览器自动化模式' : 'Browser Automation Mode' }}</h2>

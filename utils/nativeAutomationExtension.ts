@@ -2,6 +2,7 @@ import {
   NATIVE_AUTOMATION_PAGE_CONTROL_MESSAGE,
   NATIVE_AUTOMATION_TAB_CONTROL_MESSAGE,
 } from './nativeAutomationShared';
+import { getBrowserAutomationPageReadyTimeoutMs } from './storage';
 import type {
   NativeAutomationActionResult,
   NativeAutomationBridge,
@@ -16,6 +17,7 @@ type BrowserState = {
   footer: string;
 };
 
+const PAGE_CONTROL_RETRY_DELAYS_MS = [150, 300, 600];
 async function sendTabControl(action: string, payload?: Record<string, unknown>): Promise<any> {
   return await browser.runtime.sendMessage({
     type: NATIVE_AUTOMATION_TAB_CONTROL_MESSAGE,
@@ -24,13 +26,44 @@ async function sendTabControl(action: string, payload?: Record<string, unknown>)
   });
 }
 
+function isMissingPageReceiverError(error: unknown): boolean {
+  const message = error instanceof Error
+    ? error.message
+    : typeof error === 'string'
+      ? error
+      : '';
+  return message.includes('Receiving end does not exist');
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function sendPageControl(action: string, targetTabId: number, payload?: unknown): Promise<any> {
-  return await browser.runtime.sendMessage({
+  const message = {
     type: NATIVE_AUTOMATION_PAGE_CONTROL_MESSAGE,
     action,
     targetTabId,
     ...(payload !== undefined ? { payload } : {}),
-  });
+  };
+
+  for (let attempt = 0; attempt <= PAGE_CONTROL_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      const response = await browser.runtime.sendMessage(message);
+      if (response?.success !== false || !isMissingPageReceiverError(response?.error)) {
+        return response;
+      }
+      if (attempt >= PAGE_CONTROL_RETRY_DELAYS_MS.length) {
+        return response;
+      }
+    } catch (error) {
+      if (!isMissingPageReceiverError(error) || attempt >= PAGE_CONTROL_RETRY_DELAYS_MS.length) {
+        throw error;
+      }
+    }
+
+    await delay(PAGE_CONTROL_RETRY_DELAYS_MS[attempt]);
+  }
 }
 
 function assertSuccess<T>(response: any, fallbackMessage: string): T {
@@ -72,6 +105,34 @@ export function createNativeAutomationBridge(): NativeAutomationBridge {
         '无法打开新标签页',
       );
       return response.tab;
+    },
+    async waitForPageReady(tabId: number): Promise<void> {
+      const timeoutMs = await getBrowserAutomationPageReadyTimeoutMs();
+      const pollIntervalMs = 300;
+      const startedAt = Date.now();
+      while (Date.now() - startedAt <= timeoutMs) {
+        const tab = await this.getTab(tabId);
+        if (!tab) {
+          throw new Error('目标标签页不存在，无法等待页面就绪。');
+        }
+
+        const isComplete = !tab.status || tab.status === 'complete';
+        if (isComplete) {
+          try {
+            assertSuccess(
+              await sendPageControl('ping', tabId),
+              '页面内容脚本尚未就绪',
+            );
+            return;
+          } catch (error) {
+            if (!isMissingPageReceiverError(error) && !(error instanceof Error && error.message.includes('页面内容脚本尚未就绪'))) {
+              throw error;
+            }
+          }
+        }
+        await delay(pollIntervalMs);
+      }
+      throw new Error('等待页面内容脚本就绪超时。');
     },
     async closeTab(tabId: number): Promise<void> {
       assertSuccess(await sendTabControl('close_tab', { tabId }), '无法关闭标签页');

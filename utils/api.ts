@@ -17,6 +17,8 @@ import {
 import type { McpTool } from './mcp';
 import { streamChatAnthropic, streamChatAnthropicSimple, fetchAnthropicModels } from './anthropic';
 import { streamChatGemini, streamChatGeminiSimple, fetchGeminiModels } from './gemini';
+import { shouldRetryEmptyAssistantResponse } from './assistantResponsePolicy';
+import { formatServerErrorMessage } from './serverErrorFormatting';
 
 export interface ModelInfo {
   id: string;
@@ -32,10 +34,10 @@ export interface RetryConfig {
   timeout: number;         // 请求超时（毫秒）
 }
 
-const DEFAULT_RETRY_CONFIG: RetryConfig = {
-  maxRetries: 3,
+export const DEFAULT_RETRY_CONFIG: RetryConfig = {
+  maxRetries: 5,
   baseDelay: 1000,
-  maxDelay: 10000,
+  maxDelay: 15000,
   timeout: 60000,  // 60秒超时
 };
 
@@ -102,7 +104,7 @@ function parseError(error: unknown): ApiError {
       return new ApiError(ERROR_MESSAGES['INVALID_REQUEST'], 'INVALID_REQUEST', false, error);
     }
     if (status && status >= 500) {
-      return new ApiError(ERROR_MESSAGES['SERVER_ERROR'], 'SERVER_ERROR', true, error);
+      return new ApiError(formatServerErrorMessage(ERROR_MESSAGES['SERVER_ERROR'], status), 'SERVER_ERROR', true, error);
     }
   }
 
@@ -536,6 +538,8 @@ export async function* streamChat(
   let currentMessages = [...apiMessages];
   let toolCallRetryCount = 0; // 工具调用重试计数（包括参数解析错误）
   const maxToolCallRetries = 3; // 工具调用最大重试次数
+  let emptyAssistantRetryCount = 0;
+  const maxEmptyAssistantRetries = 2;
   let executedToolCallCount = 0;
   
   while (iteration < maxIterations) {
@@ -722,6 +726,7 @@ export async function* streamChat(
     
     // 检查是否有工具调用
     if (toolCalls.length > 0 && toolExecutor) {
+      emptyAssistantRetryCount = 0;
       ensureNotAborted();
       // 尝试修复不完整的 JSON 参数（处理某些模型截断输出的情况）
       for (const tc of toolCalls) {
@@ -871,7 +876,26 @@ export async function* streamChat(
       // 继续下一轮迭代
       continue;
     }
-    
+
+    if (shouldRetryEmptyAssistantResponse({
+      content: fullContent,
+      reasoning: fullReasoning,
+      toolCallCount: toolCalls.length,
+      retryCount: emptyAssistantRetryCount,
+      maxRetries: maxEmptyAssistantRetries,
+    })) {
+      emptyAssistantRetryCount++;
+      yield {
+        type: 'thinking',
+        message: `模型未返回有效内容，正在重试 (${emptyAssistantRetryCount}/${maxEmptyAssistantRetries})...`,
+      };
+      continue;
+    }
+
+    if (!fullContent.trim() && !fullReasoning.trim() && toolCalls.length === 0) {
+      throw new ApiError('模型未返回任何内容，请稍后重试', 'EMPTY_RESPONSE', false);
+    }
+
     // 没有工具调用，结束循环
     lastApiMessages = [...currentMessages];
     if (fullContent || fullReasoning) {

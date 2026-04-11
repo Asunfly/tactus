@@ -20,6 +20,7 @@ function createBridge(input?: {
   const browserStates = {
     ...(input?.browserStates ?? {}),
   };
+  const readyCalls: number[] = [];
 
   const bridge: NativeAutomationBridge = {
     async getActiveTab() {
@@ -62,6 +63,9 @@ function createBridge(input?: {
         tabs = tabs.map((tab, index) => ({ ...tab, active: index === 0 }));
       }
     },
+    async waitForPageReady(tabId) {
+      readyCalls.push(tabId);
+    },
     async getBrowserState(tabId) {
       const state = browserStates[tabId];
       if (!state) throw new Error(`Missing state for ${tabId}`);
@@ -84,7 +88,7 @@ function createBridge(input?: {
     },
   };
 
-  return { bridge, getTabs: () => tabs, getActiveTabId: () => activeTabId };
+  return { bridge, getTabs: () => tabs, getActiveTabId: () => activeTabId, getReadyCalls: () => readyCalls };
 }
 
 describe('NativeAutomationRuntime', () => {
@@ -139,7 +143,7 @@ describe('NativeAutomationRuntime', () => {
   });
 
   it('opens a new tab and makes it current', async () => {
-    const { bridge } = createBridge({
+    const { bridge, getReadyCalls } = createBridge({
       tabs: [
         { id: 11, windowId: 1, title: 'Example', url: 'https://example.com', active: true },
       ],
@@ -160,10 +164,38 @@ describe('NativeAutomationRuntime', () => {
     expect(result.success).toBe(true);
     expect(result.result).toContain('docs.example.com');
     expect(runtime.getCurrentTabId()).toBe(12);
+    expect(getReadyCalls()).toEqual([12]);
+  });
+
+  it('keeps browser_tabs new non-fatal when the target page is not automatable yet', async () => {
+    const { bridge } = createBridge({
+      tabs: [
+        { id: 11, windowId: 1, title: 'Example', url: 'https://example.com', active: true },
+      ],
+      browserStates: {
+        11: {
+          url: 'https://example.com',
+          title: 'Example',
+          header: 'Header',
+          content: 'Content',
+          footer: 'Footer',
+        },
+      },
+    });
+    bridge.waitForPageReady = async () => {
+      throw new Error('等待页面内容脚本就绪超时。');
+    };
+
+    const runtime = new NativeAutomationRuntime(bridge);
+    const result = await runtime.tabs({ action: 'new', url: 'https://blocked.example.com' });
+
+    expect(result.success).toBe(true);
+    expect(result.result).toContain('已打开并切换到新标签页');
+    expect(result.result).toContain('等待页面内容脚本就绪超时');
   });
 
   it('selects a tab by rendered index', async () => {
-    const { bridge } = createBridge({
+    const { bridge, getReadyCalls } = createBridge({
       tabs: [
         { id: 11, windowId: 1, title: 'Example', url: 'https://example.com', active: true },
         { id: 22, windowId: 1, title: 'Docs', url: 'https://docs.example.com', active: false },
@@ -192,6 +224,34 @@ describe('NativeAutomationRuntime', () => {
     expect(result.success).toBe(true);
     expect(result.result).toContain('Docs');
     expect(runtime.getCurrentTabId()).toBe(22);
+    expect(getReadyCalls()).toEqual([22]);
+  });
+
+  it('returns a recoverable observe message when page control receiver is missing', async () => {
+    const { bridge } = createBridge({
+      tabs: [
+        { id: 11, windowId: 1, title: 'Blocked', url: 'https://blocked.example.com', active: true },
+      ],
+      browserStates: {
+        11: {
+          url: 'https://blocked.example.com',
+          title: 'Blocked',
+          header: 'Header',
+          content: 'Content',
+          footer: 'Footer',
+        },
+      },
+    });
+    bridge.getBrowserState = async () => {
+      throw new Error('Could not establish connection. Receiving end does not exist.');
+    };
+
+    const runtime = new NativeAutomationRuntime(bridge);
+    const result = await runtime.observe();
+
+    expect(result.success).toBe(true);
+    expect(result.result).toContain('暂时无法自动化观察');
+    expect(result.result).toContain('Receiving end does not exist');
   });
 
   it('closes the current tab and falls back to another automatable tab', async () => {

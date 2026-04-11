@@ -37,4 +37,12 @@ describe('native automation tools', () => {
     expect(names).not.toContain('browser_observe');
     expect(names).not.toContain('browser_tabs');
   });
+
+  it('keeps browser tools hidden when the global automation switch forces the session off', () => {
+    const tools = getFilteredTools({ sharePageContent: false, skills: [], mcpTools: [], automationEnabled: false });
+    const names = tools.map(tool => tool.function.name);
+
+    expect(names).not.toContain('browser_click');
+    expect(names).not.toContain('browser_exec_js');
+  });
 });

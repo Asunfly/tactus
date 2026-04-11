@@ -94,6 +94,19 @@ export interface Translations {
   floatingBallDisabled: string;
   selectionQuote: string;
   selectionQuoteDesc: string;
+  browserAutomation: string;
+  browserAutomationDesc: string;
+  browserAutomationEnabledSetting: string;
+  browserAutomationEnabledDesc: string;
+  browserAutomationHighlight: string;
+  browserAutomationHighlightDesc: string;
+  browserAutomationMaxIterations: string;
+  browserAutomationMaxIterationsDesc: string;
+  browserAutomationMaxIterationsHint: string;
+  browserAutomationPageReadyTimeout: string;
+  browserAutomationPageReadyTimeoutDesc: string;
+  modelRequestMaxRetries: string;
+  modelRequestMaxRetriesDesc: string;
   pageContentLimit: string;
   pageContentLimitDesc: string;
   pageContentLimitHint: string;
@@ -322,6 +335,19 @@ const en: Translations = {
   floatingBallDisabled: 'Disabled',
   selectionQuote: 'Selection Quote',
   selectionQuoteDesc: 'Show quick action button when selecting text on pages',
+  browserAutomation: 'Browser Automation',
+  browserAutomationDesc: 'Control automation entry visibility and page highlight behavior',
+  browserAutomationEnabledSetting: 'Enable browser automation',
+  browserAutomationEnabledDesc: 'Show the automation entry in sidepanel and allow browser_* tools',
+  browserAutomationHighlight: 'Element highlight overlays',
+  browserAutomationHighlightDesc: 'Show page element highlight boxes and index labels during automation',
+  browserAutomationMaxIterations: 'Automation max iterations',
+  browserAutomationMaxIterationsDesc: 'Maximum model-tool turns allowed for one browser automation request',
+  browserAutomationMaxIterationsHint: 'Increase this when real-world browser tasks stop after too few steps',
+  browserAutomationPageReadyTimeout: 'Page ready timeout (ms)',
+  browserAutomationPageReadyTimeoutDesc: 'How long to wait for the content script receiver after switching to a new tab',
+  modelRequestMaxRetries: 'Model request max retries',
+  modelRequestMaxRetriesDesc: 'Maximum retry count for transient 5xx model provider failures',
   pageContentLimit: 'Max page content length',
   pageContentLimitDesc: 'Maximum number of characters extracted from current page',
   pageContentLimitHint: 'Used by page extraction tools to truncate long content',
@@ -550,6 +576,19 @@ const zhCN: Translations = {
   floatingBallDisabled: '已禁用',
   selectionQuote: '划词引用',
   selectionQuoteDesc: '选中页面文字时显示快捷操作按钮',
+  browserAutomation: '浏览器自动化',
+  browserAutomationDesc: '控制自动化入口显隐与页面辅助高亮行为',
+  browserAutomationEnabledSetting: '启用浏览器自动化',
+  browserAutomationEnabledDesc: '显示侧边栏自动化入口，并允许执行 browser_* 工具',
+  browserAutomationHighlight: '元素定位框',
+  browserAutomationHighlightDesc: '在自动化过程中显示页面元素定位框与索引标签',
+  browserAutomationMaxIterations: '自动化最大轮次',
+  browserAutomationMaxIterationsDesc: '单次浏览器自动化请求允许的模型-工具往返轮次上限',
+  browserAutomationMaxIterationsHint: '真实任务步骤较多时可适当调高，避免无报错提前停住',
+  browserAutomationPageReadyTimeout: '页面就绪等待超时（毫秒）',
+  browserAutomationPageReadyTimeoutDesc: '切换到新标签页后，等待内容脚本接收器就绪的最长时间',
+  modelRequestMaxRetries: '模型请求重试次数',
+  modelRequestMaxRetriesDesc: '模型供应商返回临时 5xx 错误时的最大重试次数',
   pageContentLimit: '网页最大字数限制',
   pageContentLimitDesc: '提取当前网页内容时的最大字符数',
   pageContentLimitHint: '用于页面提取工具，超出后会自动截断',
