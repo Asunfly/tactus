@@ -226,7 +226,7 @@ export const availableTools: FunctionTool[] = [
           down: { type: 'boolean', description: '是否向下滚动，默认 true' },
           num_pages: { type: 'number', description: '滚动多少页，默认 0.5' },
           pixels: { type: 'number', description: '可选，按像素滚动' },
-          index: { type: 'number', description: '可选，滚动特定元素而不是整个页面' },
+          index: { type: 'number', description: '可选，仅当 browser_observe 明确显示某个可滚动容器需要滚动时填写；普通页面滚动请省略 index' },
         },
         required: [],
         additionalProperties: false,

@@ -73,6 +73,16 @@ function assertSuccess<T>(response: any, fallbackMessage: string): T {
   return response as T;
 }
 
+function resolveActionResult(response: any, fallbackMessage: string): NativeAutomationActionResult {
+  if (response?.success === false && typeof response.message === 'string') {
+    return {
+      success: false,
+      message: response.message,
+    };
+  }
+  return assertSuccess<NativeAutomationActionResult>(response, fallbackMessage);
+}
+
 export function createNativeAutomationBridge(): NativeAutomationBridge {
   return {
     async getActiveTab(): Promise<NativeAutomationTabInfo | null> {
@@ -144,34 +154,47 @@ export function createNativeAutomationBridge(): NativeAutomationBridge {
       );
     },
     async clickElement(tabId: number, index: number): Promise<NativeAutomationActionResult> {
-      return assertSuccess<NativeAutomationActionResult>(
+      return resolveActionResult(
         await sendPageControl('click_element', tabId, [index]),
         '无法点击页面元素',
       );
     },
     async inputText(tabId: number, index: number, text: string): Promise<NativeAutomationActionResult> {
-      return assertSuccess<NativeAutomationActionResult>(
+      return resolveActionResult(
         await sendPageControl('input_text', tabId, [index, text]),
         '无法向页面输入文本',
       );
     },
     async selectOption(tabId: number, index: number, text: string): Promise<NativeAutomationActionResult> {
-      return assertSuccess<NativeAutomationActionResult>(
+      return resolveActionResult(
         await sendPageControl('select_option', tabId, [index, text]),
         '无法选择页面选项',
       );
     },
     async scroll(tabId: number, options): Promise<NativeAutomationActionResult> {
-      return assertSuccess<NativeAutomationActionResult>(
+      return resolveActionResult(
         await sendPageControl('scroll', tabId, [options]),
         '无法滚动页面',
       );
     },
     async executeJavascript(tabId: number, script: string): Promise<NativeAutomationActionResult> {
-      return assertSuccess<NativeAutomationActionResult>(
-        await sendPageControl('execute_javascript', tabId, [script]),
-        '无法执行页面脚本',
-      );
+      const response = await browser.runtime.sendMessage({
+        type: 'EXECUTE_SKILL_SCRIPT',
+        tabId,
+        code: script,
+        args: {},
+        scriptId: 'native_automation_exec_js',
+      });
+      if (!response?.success) {
+        return {
+          success: false,
+          message: `❌ Error executing JavaScript: ${response?.error || 'Unknown error'}`,
+        };
+      }
+      return {
+        success: true,
+        message: `✅ Executed JavaScript. Result: ${response.result}`,
+      };
     },
   };
 }

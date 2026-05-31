@@ -45,4 +45,12 @@ describe('native automation tools', () => {
     expect(names).not.toContain('browser_click');
     expect(names).not.toContain('browser_exec_js');
   });
+
+  it('tells the model to omit browser_scroll index for page scrolling', () => {
+    const tools = getFilteredTools({ sharePageContent: false, skills: [], mcpTools: [], automationEnabled: true });
+    const scrollTool = tools.find(tool => tool.function.name === 'browser_scroll');
+    const indexDescription = scrollTool?.function.parameters.properties.index.description;
+
+    expect(indexDescription).toContain('普通页面滚动请省略');
+  });
 });

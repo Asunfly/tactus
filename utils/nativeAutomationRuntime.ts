@@ -79,6 +79,17 @@ export class NativeAutomationRuntime {
     return `当前标签页暂时无法${actionLabel}，可能是页面限制了扩展脚本注入、仍在跳转，或页面结构对自动化不友好。\n\n详细错误：${message}\n\n建议：等待几秒后重试，或切换到其他标签页继续。`;
   }
 
+  private formatActionFailure(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  private isNonScrollableElementError(errorOrMessage: unknown): boolean {
+    const message = errorOrMessage instanceof Error
+      ? errorOrMessage.message
+      : String(errorOrMessage);
+    return message.includes('No scrollable container found');
+  }
+
   async observe(): Promise<NativeAutomationToolResult> {
     const target = await this.ensureCurrentTarget();
     if (!target) {
@@ -134,12 +145,31 @@ export class NativeAutomationRuntime {
     pixels?: number;
     index?: number;
   }): Promise<NativeAutomationToolResult> {
-    return this.runOnTarget(target => this.bridge.scroll(target.id, {
+    const options = {
       down: input.down ?? true,
       numPages: input.num_pages ?? 0.5,
-      ...(typeof input.pixels === 'number' ? { pixels: input.pixels } : {}),
+      ...(typeof input.pixels === 'number' && input.pixels !== 0 ? { pixels: input.pixels } : {}),
       ...(typeof input.index === 'number' ? { index: input.index } : {}),
-    }));
+    };
+    return this.runOnTarget(async target => {
+      try {
+        const result = await this.bridge.scroll(target.id, options);
+        if (
+          typeof input.index === 'number'
+          && (!result.success || this.isNonScrollableElementError(result.message))
+        ) {
+          const { index: _index, ...pageScrollOptions } = options;
+          return await this.bridge.scroll(target.id, pageScrollOptions);
+        }
+        return result;
+      } catch (error) {
+        if (typeof input.index === 'number' && this.isNonScrollableElementError(error)) {
+          const { index: _index, ...pageScrollOptions } = options;
+          return await this.bridge.scroll(target.id, pageScrollOptions);
+        }
+        throw error;
+      }
+    });
   }
 
   async wait(seconds = 1): Promise<NativeAutomationToolResult> {
@@ -256,7 +286,10 @@ export class NativeAutomationRuntime {
           result: this.formatRecoverablePageMessage('执行页面操作', error),
         };
       }
-      throw error;
+      return {
+        success: false,
+        result: this.formatActionFailure(error),
+      };
     }
     return {
       success: result.success,

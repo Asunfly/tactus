@@ -286,4 +286,180 @@ describe('NativeAutomationRuntime', () => {
     expect(runtime.getCurrentTabId()).toBe(11);
     expect(result.result).toContain('Example');
   });
+
+  it('returns page action failures as tool results instead of throwing', async () => {
+    const { bridge } = createBridge({
+      tabs: [
+        { id: 11, windowId: 1, title: 'Example', url: 'https://example.com', active: true },
+      ],
+      browserStates: {
+        11: {
+          url: 'https://example.com',
+          title: 'Example',
+          header: 'Header',
+          content: '[0]<div>not scrollable</div>',
+          footer: 'Footer',
+        },
+      },
+    });
+    bridge.scroll = async () => {
+      throw new Error('无法滚动页面');
+    };
+
+    const runtime = new NativeAutomationRuntime(bridge);
+    const result = await runtime.scroll({ down: true, index: 0, pixels: 1800 });
+
+    expect(result).toEqual({
+      success: false,
+      result: '无法滚动页面',
+    });
+  });
+
+  it('falls back to page scrolling when an indexed element is not scrollable', async () => {
+    const { bridge } = createBridge({
+      tabs: [
+        { id: 11, windowId: 1, title: 'Example', url: 'https://example.com', active: true },
+      ],
+      browserStates: {
+        11: {
+          url: 'https://example.com',
+          title: 'Example',
+          header: 'Header',
+          content: '[0]<div>not scrollable</div>',
+          footer: 'Footer',
+        },
+      },
+    });
+    const scrollCalls: Array<{ down: boolean; numPages: number; pixels?: number; index?: number }> = [];
+    bridge.scroll = async (_tabId, options) => {
+      scrollCalls.push(options);
+      if (typeof options.index === 'number') {
+        throw new Error('No scrollable container found for element (DIV)');
+      }
+      return { success: true, message: 'scrolled page' };
+    };
+
+    const runtime = new NativeAutomationRuntime(bridge);
+    const result = await runtime.scroll({ down: true, index: 0, pixels: 1800 });
+
+    expect(result).toEqual({
+      success: true,
+      result: 'scrolled page',
+    });
+    expect(scrollCalls).toEqual([
+      { down: true, numPages: 0.5, pixels: 1800, index: 0 },
+      { down: true, numPages: 0.5, pixels: 1800 },
+    ]);
+  });
+
+  it('falls back to page scrolling when an indexed scroll reports a non-scrollable element message', async () => {
+    const { bridge } = createBridge({
+      tabs: [
+        { id: 11, windowId: 1, title: 'Example', url: 'https://example.com', active: true },
+      ],
+      browserStates: {
+        11: {
+          url: 'https://example.com',
+          title: 'Example',
+          header: 'Header',
+          content: '[0]<div>not scrollable</div>',
+          footer: 'Footer',
+        },
+      },
+    });
+    const scrollCalls: Array<{ down: boolean; numPages: number; pixels?: number; index?: number }> = [];
+    bridge.scroll = async (_tabId, options) => {
+      scrollCalls.push(options);
+      if (typeof options.index === 'number') {
+        return { success: true, message: 'No scrollable container found for element (DIV)' };
+      }
+      return { success: true, message: 'Scrolled page by 1800px' };
+    };
+
+    const runtime = new NativeAutomationRuntime(bridge);
+    const result = await runtime.scroll({ down: true, index: 0, pixels: 1800 });
+
+    expect(result).toEqual({
+      success: true,
+      result: 'Scrolled page by 1800px',
+    });
+    expect(scrollCalls).toEqual([
+      { down: true, numPages: 0.5, pixels: 1800, index: 0 },
+      { down: true, numPages: 0.5, pixels: 1800 },
+    ]);
+  });
+
+  it('ignores zero-pixel scroll arguments so page scroll can use page counts', async () => {
+    const { bridge } = createBridge({
+      tabs: [
+        { id: 11, windowId: 1, title: 'Example', url: 'https://example.com', active: true },
+      ],
+      browserStates: {
+        11: {
+          url: 'https://example.com',
+          title: 'Example',
+          header: 'Header',
+          content: '[0]<div>not scrollable</div>',
+          footer: 'Footer',
+        },
+      },
+    });
+    const scrollCalls: Array<{ down: boolean; numPages: number; pixels?: number; index?: number }> = [];
+    bridge.scroll = async (_tabId, options) => {
+      scrollCalls.push(options);
+      if (typeof options.index === 'number') {
+        return { success: true, message: 'No scrollable container found for element (DIV)' };
+      }
+      return { success: true, message: `Scrolled page by ${options.numPages} pages` };
+    };
+
+    const runtime = new NativeAutomationRuntime(bridge);
+    const result = await runtime.scroll({ down: true, index: 0, num_pages: 1, pixels: 0 });
+
+    expect(result).toEqual({
+      success: true,
+      result: 'Scrolled page by 1 pages',
+    });
+    expect(scrollCalls).toEqual([
+      { down: true, numPages: 1, index: 0 },
+      { down: true, numPages: 1 },
+    ]);
+  });
+
+  it('falls back to page scrolling when an indexed scroll returns an action failure', async () => {
+    const { bridge } = createBridge({
+      tabs: [
+        { id: 11, windowId: 1, title: 'Example', url: 'https://example.com', active: true },
+      ],
+      browserStates: {
+        11: {
+          url: 'https://example.com',
+          title: 'Example',
+          header: 'Header',
+          content: '[0]<div>not visible after partial scroll</div>',
+          footer: 'Footer',
+        },
+      },
+    });
+    const scrollCalls: Array<{ down: boolean; numPages: number; pixels?: number; index?: number }> = [];
+    bridge.scroll = async (_tabId, options) => {
+      scrollCalls.push(options);
+      if (typeof options.index === 'number') {
+        return { success: false, message: '❌ Failed to scroll: Error: No element found with index 0' };
+      }
+      return { success: true, message: 'Scrolled page by 300px' };
+    };
+
+    const runtime = new NativeAutomationRuntime(bridge);
+    const result = await runtime.scroll({ down: true, index: 0, num_pages: 0.5, pixels: 300 });
+
+    expect(result).toEqual({
+      success: true,
+      result: 'Scrolled page by 300px',
+    });
+    expect(scrollCalls).toEqual([
+      { down: true, numPages: 0.5, pixels: 300, index: 0 },
+      { down: true, numPages: 0.5, pixels: 300 },
+    ]);
+  });
 });
